@@ -113,32 +113,38 @@ def overall_interview_score(comm, skill, personality):
     return round(final_score, 2)
 
 # =============================
+# =============================
 # STREAMLIT UI
 # =============================
-st.set_page_config(page_title="Interview Analyzer", layout="centered")
+def main():
+    st.set_page_config(page_title="Interview Analyzer", layout="centered")
 
-st.title("🎯 Interview Performance Analyzer")
-st.write("Upload an interview transcript to get structured feedback and an overall score.")
+    st.title("🎯 Interview Performance Analyzer")
+    st.write("Upload an interview transcript to get structured feedback and an overall score.")
 
-uploaded_file = st.file_uploader(
-    "Upload Interview Transcript (.txt or .docx)",
-    type=["txt", "docx"]
-)
+    uploaded_file = st.file_uploader(
+        "Upload Interview Transcript (.txt or .docx)",
+        type=["txt", "docx"]
+    )
 
-if uploaded_file:
-    with st.spinner("Analyzing interview..."):
-        text = read_transcript(uploaded_file)
+    if uploaded_file:
+        with st.spinner("Analyzing interview..."):
+            text = read_transcript(uploaded_file)
 
-        comm = communication_score(text)
-        skill = interview_skill_score(text)
-        personality = personality_analysis(text)
-        final_score = overall_interview_score(comm, skill, personality)
+            comm = communication_score(text)
+            skill = interview_skill_score(text)
+            personality = personality_analysis(text)
+            final_score = overall_interview_score(comm, skill, personality)
 
-    st.subheader("📊 Scores")
-    st.metric("Overall Interview Score", f"{final_score}%")
-    st.metric("Communication", f"{comm}%")
-    st.metric("Interview Skills", f"{skill}%")
+        st.subheader("📊 Scores")
+        st.metric("Overall Interview Score", f"{final_score}%")
+        st.metric("Communication", f"{comm}%")
+        st.metric("Interview Skills", f"{skill}%")
 
-    st.subheader("🧠 Personality Signals")
-    for k, v in personality.items():
-        st.write(f"**{k}**: {v}")
+        st.subheader("🧠 Personality Signals")
+        for k, v in personality.items():
+            st.write(f"**{k}**: {v}")
+
+
+if __name__ == "__main__":
+    main()
