@@ -5,8 +5,14 @@ import re
 import tempfile
 import smtplib
 from email.message import EmailMessage
+import re as regex
 
 import google.generativeai as genai
+
+# =============================
+# CONSTANTS
+# =============================
+SENDER_EMAIL = "soumikghoshal2018@gmail.com"
 
 # =============================
 # GEMINI CONFIG (FREE TIER SAFE)
@@ -132,7 +138,7 @@ Interview Analysis:
     return response.text
 
 # =============================
-# TEXT REPORT GENERATION (NO PDF)
+# TEXT REPORT GENERATION
 # =============================
 def generate_feedback_text(summary: dict, ai_feedback: str) -> str:
     temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".txt")
@@ -157,16 +163,16 @@ def generate_feedback_text(summary: dict, ai_feedback: str) -> str:
     return path
 
 # =============================
-# EMAIL SENDER
+# EMAIL SENDER (FIXED FROM, USER TO)
 # =============================
-def send_email_with_attachment(file_path: str):
+def send_email_to_user(file_path: str, user_email: str):
     msg = EmailMessage()
     msg["Subject"] = "Your Interview Feedback Report"
-    msg["From"] = st.secrets["EMAIL_ADDRESS"]
-    msg["To"] = st.secrets["EMAIL_ADDRESS"]
+    msg["From"] = SENDER_EMAIL
+    msg["To"] = user_email
 
     msg.set_content(
-        "Hi,\n\nAttached is your interview feedback report.\n\nBest,\nInterview Analyzer"
+        "Hi,\n\nAttached is your interview feedback report.\n\nBest,\nSoumik"
     )
 
     with open(file_path, "rb") as f:
@@ -179,10 +185,16 @@ def send_email_with_attachment(file_path: str):
 
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
         server.login(
-            st.secrets["EMAIL_ADDRESS"],
+            SENDER_EMAIL,
             st.secrets["EMAIL_APP_PASSWORD"]
         )
         server.send_message(msg)
+
+# =============================
+# EMAIL VALIDATION
+# =============================
+def is_valid_email(email: str) -> bool:
+    return regex.match(r"^[\w\.-]+@[\w\.-]+\.\w+$", email) is not None
 
 # =============================
 # STREAMLIT UI
@@ -232,16 +244,22 @@ if uploaded_file:
     if st.session_state.ai_feedback:
         st.write(st.session_state.ai_feedback)
 
-        if st.button("📧 Email me the feedback"):
-            with st.spinner("Sending email..."):
-                report_path = generate_feedback_text(
-                    summary={
-                        "communication_score": comm,
-                        "skill_score": skill,
-                        "personality": personality,
-                        "final_score": final_score
-                    },
-                    ai_feedback=st.session_state.ai_feedback
-                )
-                send_email_with_attachment(report_path)
-                st.success("Email sent successfully 📬")
+        st.subheader("📧 Email this report to me")
+        user_email = st.text_input("Enter your email address")
+
+        if st.button("Send Email"):
+            if not is_valid_email(user_email):
+                st.error("Please enter a valid email address.")
+            else:
+                with st.spinner("Sending email..."):
+                    report_path = generate_feedback_text(
+                        summary={
+                            "communication_score": comm,
+                            "skill_score": skill,
+                            "personality": personality,
+                            "final_score": final_score
+                        },
+                        ai_feedback=st.session_state.ai_feedback
+                    )
+                    send_email_to_user(report_path, user_email)
+                    st.success(f"Report sent to {user_email} 📬")
