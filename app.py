@@ -121,13 +121,13 @@ def send_email_to_user(file_path: str, user_email: str):
         content = f.read()
 
     response = requests.post(
-        RESEND_ENDPOINT,
+        "https://api.resend.com/emails",
         headers={
-            "Authorization": f"Bearer {RESEND_API_KEY}",
+            "Authorization": f"Bearer {st.secrets['RESEND_API_KEY']}",
             "Content-Type": "application/json"
         },
         json={
-            "from": SENDER_EMAIL,
+            "from": "onboarding@resend.dev",
             "to": user_email,
             "subject": "Your Interview Feedback Report",
             "text": content
@@ -135,7 +135,7 @@ def send_email_to_user(file_path: str, user_email: str):
     )
 
     if response.status_code not in (200, 201):
-        raise Exception(response.text)
+        raise Exception("Email failed to send")
 
 # =============================
 # UI
