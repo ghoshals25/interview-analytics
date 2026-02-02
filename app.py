@@ -12,7 +12,7 @@ import google.generativeai as genai
 # =============================
 # CONSTANTS
 # =============================
-SENDER_EMAIL = "soumikghoshal2018@gmail.com"
+SENDER_EMAIL = "soumikghoshalireland@gmail.com"
 
 # =============================
 # GEMINI CONFIG (FREE TIER SAFE)
