@@ -113,38 +113,66 @@ def overall_interview_score(comm, skill, personality):
     return round(final_score, 2)
 
 # =============================
+# FEATURE 1: KEYWORD EVIDENCE
+# =============================
+def extract_keyword_hits(text, keywords, max_hits=5):
+    hits = [k for k in keywords if k in text]
+    return hits[:max_hits]
+
 # =============================
 # STREAMLIT UI
 # =============================
-def main():
-    st.set_page_config(page_title="Interview Analyzer", layout="centered")
+st.set_page_config(page_title="Interview Analyzer", layout="centered")
 
-    st.title("🎯 Interview Performance Analyzer")
-    st.write("Upload an interview transcript to get structured feedback and an overall score.")
+st.title("🎯 Interview Performance Analyzer")
+st.write("Upload an interview transcript to get structured feedback and an overall score.")
 
-    uploaded_file = st.file_uploader(
-        "Upload Interview Transcript (.txt or .docx)",
-        type=["txt", "docx"]
+uploaded_file = st.file_uploader(
+    "Upload Interview Transcript (.txt or .docx)",
+    type=["txt", "docx"]
+)
+
+if uploaded_file:
+    with st.spinner("Analyzing interview..."):
+        text = read_transcript(uploaded_file)
+
+        comm = communication_score(text)
+        skill = interview_skill_score(text)
+        personality = personality_analysis(text)
+        final_score = overall_interview_score(comm, skill, personality)
+
+    # -----------------------------
+    # Scores
+    # -----------------------------
+    st.subheader("📊 Scores")
+    st.metric("Overall Interview Score", f"{final_score}%")
+    st.metric("Communication", f"{comm}%")
+    st.metric("Interview Skills", f"{skill}%")
+
+    # -----------------------------
+    # Personality
+    # -----------------------------
+    st.subheader("🧠 Personality Signals")
+    for k, v in personality.items():
+        st.write(f"**{k}**: {v}")
+
+    # -----------------------------
+    # FEATURE 1 OUTPUT
+    # -----------------------------
+    st.subheader("🔍 Evidence from Your Answers")
+
+    strong_signals = extract_keyword_hits(
+        text,
+        IMPACT_WORDS + EXAMPLE_PHRASES + PROBLEM_WORDS
     )
 
-    if uploaded_file:
-        with st.spinner("Analyzing interview..."):
-            text = read_transcript(uploaded_file)
+    weak_signals = extract_keyword_hits(
+        text,
+        FILLER_WORDS + PERSONALITY_SIGNALS["Uncertainty"]
+    )
 
-            comm = communication_score(text)
-            skill = interview_skill_score(text)
-            personality = personality_analysis(text)
-            final_score = overall_interview_score(comm, skill, personality)
+    st.write("✅ **Strong signals detected**")
+    st.write(strong_signals if strong_signals else "No strong evidence detected")
 
-        st.subheader("📊 Scores")
-        st.metric("Overall Interview Score", f"{final_score}%")
-        st.metric("Communication", f"{comm}%")
-        st.metric("Interview Skills", f"{skill}%")
-
-        st.subheader("🧠 Personality Signals")
-        for k, v in personality.items():
-            st.write(f"**{k}**: {v}")
-
-
-if __name__ == "__main__":
-    main()
+    st.write("⚠️ **Potential improvement areas**")
+    st.write(weak_signals if weak_signals else "No major issues detected")
