@@ -10,6 +10,13 @@ from groq import Groq
 client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 
 # =============================
+# SESSION STATE GUARD
+# =============================
+if "ai_feedback" not in st.session_state:
+    st.session_state.ai_feedback = None
+    st.session_state.ai_attempted = False
+
+# =============================
 # READ TRANSCRIPT
 # =============================
 def read_transcript(uploaded_file) -> str:
@@ -174,37 +181,43 @@ if uploaded_file:
     strong = extract_keyword_hits(text, IMPACT_WORDS + EXAMPLE_PHRASES + PROBLEM_WORDS)
     weak = extract_keyword_hits(text, FILLER_WORDS + PERSONALITY_SIGNALS["Uncertainty"])
 
+    # Scores
     st.subheader("📊 Scores")
     st.progress(final_score / 100)
     st.caption(f"Overall Score: {final_score}%")
     st.metric("Communication", f"{comm}%")
     st.metric("Interview Skills", f"{skill}%")
 
+    # Personality
     st.subheader("🧠 Personality Signals")
     for k, v in personality.items():
         st.write(f"**{k}**: {v}")
 
+    # Evidence
     st.subheader("🔍 Evidence from Your Answers")
     for s in strong:
         st.write(f"✅ **{s}** — {SIGNAL_EXPLANATIONS.get(s, '')}")
     for w in weak:
         st.write(f"⚠️ **{w}** — {SIGNAL_EXPLANATIONS.get(w, '')}")
 
+    # AI Feedback (single-call only)
     st.subheader("🤖 AI Interview Coach Feedback")
 
-    if "ai_feedback" not in st.session_state:
+    if not st.session_state.ai_attempted:
+        st.session_state.ai_attempted = True
         try:
-            st.session_state.ai_feedback = generate_ai_feedback({
-                "communication_score": comm,
-                "skill_score": skill,
-                "personality": personality,
-                "strong_signals": strong,
-                "weak_signals": weak
-            })
+            with st.spinner("Generating AI feedback..."):
+                st.session_state.ai_feedback = generate_ai_feedback({
+                    "communication_score": comm,
+                    "skill_score": skill,
+                    "personality": personality,
+                    "strong_signals": strong,
+                    "weak_signals": weak
+                })
         except Exception:
             st.session_state.ai_feedback = None
 
     if st.session_state.ai_feedback:
         st.write(st.session_state.ai_feedback)
     else:
-        st.warning("AI feedback temporarily unavailable (free API limit).")
+        st.warning("AI feedback temporarily unavailable (free API limit). Try again later.")
