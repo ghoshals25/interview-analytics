@@ -1,7 +1,4 @@
 import streamlit as st
-import docx
-from pathlib import Path
-import re
 import tempfile
 import requests
 import google.generativeai as genai
@@ -9,169 +6,142 @@ import google.generativeai as genai
 # =============================
 # CONFIG
 # =============================
+st.set_page_config(page_title="Interview Review (Manual)", layout="centered")
+
 genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 gemini_model = genai.GenerativeModel("gemini-2.5-flash-lite")
 
 RESEND_API_KEY = st.secrets["RESEND_API_KEY"]
 RESEND_ENDPOINT = "https://api.resend.com/emails"
-SENDER_EMAIL = "Soumik <onboarding@resend.dev>"  # default Resend sender
+SENDER_EMAIL = "Soumik <onboarding@resend.dev>"
 
 # =============================
 # SESSION STATE
 # =============================
 if "ai_feedback" not in st.session_state:
     st.session_state.ai_feedback = None
-    st.session_state.ai_attempted = False
 
 # =============================
-# HELPERS
+# AI INTERPRETATION (NO SCORING)
 # =============================
-def read_transcript(uploaded_file) -> str:
-    suffix = Path(uploaded_file.name).suffix.lower()
-
-    if suffix == ".docx":
-        doc = docx.Document(uploaded_file)
-        return "\n".join(p.text for p in doc.paragraphs).lower()
-    elif suffix == ".txt":
-        return uploaded_file.read().decode("utf-8", errors="ignore").lower()
-    else:
-        raise ValueError("Unsupported file format")
-
-FILLER_WORDS = ["um", "uh", "like", "you know", "basically", "sort of", "kind of"]
-
-def communication_score(text: str) -> float:
-    words = text.split()
-    sentences = [s for s in re.split(r"[.!?]", text) if s.strip()]
-    filler_count = sum(text.count(f) for f in FILLER_WORDS)
-    avg_sentence_length = len(words) / max(len(sentences), 1)
-    score = 1 - min(filler_count / 12, 1) - (0.3 if avg_sentence_length > 25 else 0)
-    return round(max(score, 0) * 100, 2)
-
-EXAMPLE_PHRASES = ["for example", "for instance", "when i", "i worked on"]
-IMPACT_WORDS = ["%", "percent", "increased", "reduced", "improved"]
-PROBLEM_WORDS = ["problem", "challenge", "solution", "approach"]
-
-def interview_skill_score(text: str) -> float:
-    score = 0
-    if any(p in text for p in EXAMPLE_PHRASES): score += 0.3
-    if any(p in text for p in IMPACT_WORDS): score += 0.35
-    if any(p in text for p in PROBLEM_WORDS): score += 0.35
-    return round(score * 100, 2)
-
-PERSONALITY_SIGNALS = {
-    "Confidence": ["i led", "i owned", "i decided"],
-    "Collaboration": ["we", "team", "stakeholder"],
-    "Growth Mindset": ["learned", "improved"],
-    "Uncertainty": ["maybe", "i think"]
-}
-
-def personality_analysis(text: str):
-    return {
-        trait: "High" if sum(text.count(p) for p in phrases) >= 3 else
-               "Medium" if any(p in text for p in phrases) else "Low"
-        for trait, phrases in PERSONALITY_SIGNALS.items()
-    }
-
-def overall_interview_score(comm, skill, personality):
-    personality_score = sum(
-        1 if v == "High" else 0.5 if v == "Medium" else 0
-        for v in personality.values()
-    ) / len(personality)
-
-    return round(
-        skill * 0.4 + comm * 0.35 + personality_score * 100 * 0.25, 2
-    )
-
-# =============================
-# AI FEEDBACK
-# =============================
-def generate_ai_feedback(summary: dict) -> str:
+def generate_ai_interpretation(scores: dict) -> str:
     prompt = f"""
-You are an experienced interview coach.
+You are an interview feedback interpreter.
 
-Give:
-1. Overall assessment
-2. 2 strengths
-3. 2 improvements
+IMPORTANT:
+- You did NOT score this interview
+- Scores were entered manually by a reviewer
+- You must ONLY interpret the numbers provided
 
-Scores:
-Communication: {summary['communication_score']}%
-Interview Skills: {summary['skill_score']}%
-Personality: {summary['personality']}
+Manual Scores:
+- Communication: {scores['communication']}%
+- Problem Solving: {scores['problem_solving']}%
+- Confidence: {scores['confidence']}%
+- Structure & Clarity: {scores['structure']}%
+- Overall Score: {scores['overall']}%
+
+Your task:
+1. Overall interpretation
+2. 2 strengths based strictly on high scores
+3. 2 improvements based strictly on low scores
 """
     response = gemini_model.generate_content(prompt)
     return response.text
 
 # =============================
-# TEXT REPORT
+# REPORT GENERATION
 # =============================
-def generate_feedback_text(summary: dict, feedback: str) -> str:
+def generate_report(scores: dict, feedback: str) -> str:
     temp = tempfile.NamedTemporaryFile(delete=False, suffix=".txt")
     with open(temp.name, "w") as f:
-        f.write("INTERVIEW PERFORMANCE REPORT\n\n")
-        f.write(f"Overall Score: {summary['final_score']}%\n\n")
+        f.write("INTERVIEW PERFORMANCE REPORT\n")
+        f.write("=" * 30 + "\n\n")
+
+        for k, v in scores.items():
+            f.write(f"{k.replace('_',' ').title()}: {v}%\n")
+
+        f.write("\nAI Interpretation\n")
+        f.write("-" * 20 + "\n")
         f.write(feedback)
+
     return temp.name
 
 # =============================
-# RESEND EMAIL
+# EMAIL SENDER
 # =============================
-def send_email_to_user(file_path: str, user_email: str):
-    with open(file_path, "r") as f:
+def send_email(report_path: str, user_email: str):
+    with open(report_path, "r") as f:
         content = f.read()
 
     response = requests.post(
-        "https://api.resend.com/emails",
+        RESEND_ENDPOINT,
         headers={
-            "Authorization": f"Bearer {st.secrets['RESEND_API_KEY']}",
-            "Content-Type": "application/json"
+            "Authorization": f"Bearer {RESEND_API_KEY}",
+            "Content-Type": "application/json",
         },
         json={
-            "from": "onboarding@resend.dev",
+            "from": SENDER_EMAIL,
             "to": user_email,
             "subject": "Your Interview Feedback Report",
-            "text": content
-        }
+            "text": content,
+        },
     )
 
     if response.status_code not in (200, 201):
-        raise Exception("Email failed to send")
+        raise Exception(response.text)
 
 # =============================
 # UI
 # =============================
-st.set_page_config(page_title="Interview Analyzer", layout="centered")
-st.title("🎯 Interview Performance Analyzer")
+st.title("🧑‍💼 Interview Review — Manual Scoring")
 
-uploaded_file = st.file_uploader("Upload transcript (.txt / .docx)", ["txt", "docx"])
-user_email = st.text_input("📧 Enter your email to receive the report")
+st.caption(
+    "ℹ️ Scores are entered manually. AI only interprets the scores."
+)
 
-if uploaded_file:
-    text = read_transcript(uploaded_file)
+st.subheader("🔢 Manual Interview Scores")
 
-    comm = communication_score(text)
-    skill = interview_skill_score(text)
-    personality = personality_analysis(text)
-    final_score = overall_interview_score(comm, skill, personality)
+communication = st.slider("Communication", 0, 100, 70)
+problem_solving = st.slider("Problem Solving", 0, 100, 70)
+confidence = st.slider("Confidence", 0, 100, 70)
+structure = st.slider("Structure & Clarity", 0, 100, 70)
 
-    summary = {
-        "communication_score": comm,
-        "skill_score": skill,
-        "personality": personality,
-        "final_score": final_score
-    }
+overall = round(
+    (communication + problem_solving + confidence + structure) / 4, 2
+)
 
-    if not st.session_state.ai_attempted:
-        st.session_state.ai_attempted = True
-        st.session_state.ai_feedback = generate_ai_feedback(summary)
+scores = {
+    "communication": communication,
+    "problem_solving": problem_solving,
+    "confidence": confidence,
+    "structure": structure,
+    "overall": overall,
+}
 
-    st.subheader("🤖 AI Feedback")
+st.markdown(f"### ✅ Overall Score: **{overall}%**")
+
+# =============================
+# AI INTERPRETATION
+# =============================
+if st.button("🤖 Generate AI Interpretation"):
+    st.session_state.ai_feedback = generate_ai_interpretation(scores)
+
+if st.session_state.ai_feedback:
+    st.subheader("📋 AI Interpretation")
     st.write(st.session_state.ai_feedback)
 
-    if st.button("📤 Email Me the Report"):
-        if not user_email:
-            st.error("Please enter an email address")
-        else:
-            report = generate_feedback_text(summary, st.session_state.ai_feedback)
-            send_email_to_user(report, user_email)
-            st.success("✅ Email sent successfully!")
+# =============================
+# EMAIL
+# =============================
+st.subheader("📧 Email Report")
+user_email = st.text_input("Enter recipient email")
+
+if st.button("📤 Send Email"):
+    if not user_email:
+        st.error("Please enter an email address")
+    elif not st.session_state.ai_feedback:
+        st.error("Generate AI interpretation first")
+    else:
+        report = generate_report(scores, st.session_state.ai_feedback)
+        send_email(report, user_email)
+        st.success("✅ Report emailed successfully!")
