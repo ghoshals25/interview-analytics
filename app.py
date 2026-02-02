@@ -3,16 +3,15 @@ import docx
 from pathlib import Path
 import re
 import tempfile
-import smtplib
-from email.message import EmailMessage
 import re as regex
+import requests
 
 import google.generativeai as genai
 
 # =============================
 # CONSTANTS
 # =============================
-SENDER_EMAIL = "soumikghoshal2018@gmail.com"
+EMAIL_SENDER = "Soumik <onboarding@resend.dev>"
 
 # =============================
 # GEMINI CONFIG (FREE TIER SAFE)
@@ -163,32 +162,28 @@ def generate_feedback_text(summary: dict, ai_feedback: str) -> str:
     return path
 
 # =============================
-# EMAIL SENDER (FIXED FROM, USER TO)
+# EMAIL VIA RESEND
 # =============================
 def send_email_to_user(file_path: str, user_email: str):
-    msg = EmailMessage()
-    msg["Subject"] = "Your Interview Feedback Report"
-    msg["From"] = SENDER_EMAIL
-    msg["To"] = user_email
+    with open(file_path, "r") as f:
+        content = f.read()
 
-    msg.set_content(
-        "Hi,\n\nAttached is your interview feedback report.\n\nBest,\nSoumik"
+    response = requests.post(
+        "https://api.resend.com/emails",
+        headers={
+            "Authorization": f"Bearer {st.secrets['RESEND_API_KEY']}",
+            "Content-Type": "application/json"
+        },
+        json={
+            "from": EMAIL_SENDER,
+            "to": user_email,
+            "subject": "Your Interview Feedback Report",
+            "text": content
+        }
     )
 
-    with open(file_path, "rb") as f:
-        msg.add_attachment(
-            f.read(),
-            maintype="text",
-            subtype="plain",
-            filename="Interview_Feedback.txt"
-        )
-
-    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-        server.login(
-            SENDER_EMAIL,
-            st.secrets["EMAIL_APP_PASSWORD"]
-        )
-        server.send_message(msg)
+    if response.status_code != 200:
+        raise Exception(f"Resend error: {response.text}")
 
 # =============================
 # EMAIL VALIDATION
