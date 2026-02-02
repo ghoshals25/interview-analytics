@@ -2,6 +2,12 @@ import streamlit as st
 import docx
 from pathlib import Path
 import re
+from openai import OpenAI
+
+# =============================
+# OPENAI CLIENT (SAFE)
+# =============================
+client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
 # =============================
 # READ TRANSCRIPT
@@ -119,13 +125,57 @@ def extract_keyword_hits(text, keywords, max_hits=5):
     hits = [k for k in keywords if k in text]
     return hits[:max_hits]
 
+SIGNAL_EXPLANATIONS = {
+    "percent": "Shows quantified impact",
+    "reduced": "Demonstrates efficiency or optimisation",
+    "improved": "Indicates continuous improvement",
+    "impact": "Outcome-focused language",
+    "for example": "Structured explanation",
+    "um": "Verbal filler",
+    "like": "Informal filler",
+    "maybe": "Signals uncertainty",
+}
+
+# =============================
+# GENAI FEATURE: AI COACH
+# =============================
+def generate_ai_feedback(summary: dict) -> str:
+    prompt = f"""
+You are an experienced interview coach.
+
+Based on the structured interview analysis below, provide:
+1. A short overall assessment (2–3 sentences)
+2. 2–3 strengths
+3. 2 concrete, actionable improvement suggestions
+
+Be professional, constructive, and concise.
+
+Interview Analysis:
+- Communication score: {summary['communication_score']}%
+- Interview skill score: {summary['skill_score']}%
+- Personality signals: {summary['personality']}
+- Strong signals: {summary['strong_signals']}
+- Weak signals: {summary['weak_signals']}
+"""
+
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": "You are a helpful interview coach."},
+            {"role": "user", "content": prompt}
+        ],
+        temperature=0.4
+    )
+
+    return response.choices[0].message.content.strip()
+
 # =============================
 # STREAMLIT UI
 # =============================
 st.set_page_config(page_title="Interview Analyzer", layout="centered")
 
 st.title("🎯 Interview Performance Analyzer")
-st.write("Upload an interview transcript to get structured feedback and an overall score.")
+st.write("Upload an interview transcript to receive structured, AI-assisted feedback.")
 
 uploaded_file = st.file_uploader(
     "Upload Interview Transcript (.txt or .docx)",
@@ -141,16 +191,25 @@ if uploaded_file:
         personality = personality_analysis(text)
         final_score = overall_interview_score(comm, skill, personality)
 
+        strong_signals = extract_keyword_hits(
+            text, IMPACT_WORDS + EXAMPLE_PHRASES + PROBLEM_WORDS
+        )
+        weak_signals = extract_keyword_hits(
+            text, FILLER_WORDS + PERSONALITY_SIGNALS["Uncertainty"]
+        )
+
     # -----------------------------
-    # Scores
+    # SCORES
     # -----------------------------
     st.subheader("📊 Scores")
-    st.metric("Overall Interview Score", f"{final_score}%")
+    st.progress(final_score / 100)
+    st.caption(f"Overall Interview Score: {final_score}%")
+
     st.metric("Communication", f"{comm}%")
     st.metric("Interview Skills", f"{skill}%")
 
     # -----------------------------
-    # Personality
+    # PERSONALITY
     # -----------------------------
     st.subheader("🧠 Personality Signals")
     for k, v in personality.items():
@@ -161,18 +220,31 @@ if uploaded_file:
     # -----------------------------
     st.subheader("🔍 Evidence from Your Answers")
 
-    strong_signals = extract_keyword_hits(
-        text,
-        IMPACT_WORDS + EXAMPLE_PHRASES + PROBLEM_WORDS
-    )
+    if strong_signals:
+        for s in strong_signals:
+            st.write(f"✅ **{s}** — {SIGNAL_EXPLANATIONS.get(s, '')}")
+    else:
+        st.write("No strong evidence detected")
 
-    weak_signals = extract_keyword_hits(
-        text,
-        FILLER_WORDS + PERSONALITY_SIGNALS["Uncertainty"]
-    )
+    if weak_signals:
+        for w in weak_signals:
+            st.write(f"⚠️ **{w}** — {SIGNAL_EXPLANATIONS.get(w, '')}")
+    else:
+        st.write("No major issues detected")
 
-    st.write("✅ **Strong signals detected**")
-    st.write(strong_signals if strong_signals else "No strong evidence detected")
+    # -----------------------------
+    # GENAI FEEDBACK
+    # -----------------------------
+    summary = {
+        "communication_score": comm,
+        "skill_score": skill,
+        "personality": personality,
+        "strong_signals": strong_signals,
+        "weak_signals": weak_signals
+    }
 
-    st.write("⚠️ **Potential improvement areas**")
-    st.write(weak_signals if weak_signals else "No major issues detected")
+    with st.spinner("Generating AI feedback..."):
+        ai_feedback = generate_ai_feedback(summary)
+
+    st.subheader("🤖 AI Interview Coach Feedback")
+    st.write(ai_feedback)
