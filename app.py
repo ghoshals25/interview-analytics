@@ -7,9 +7,6 @@ import smtplib
 from email.message import EmailMessage
 
 import google.generativeai as genai
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
-from reportlab.lib.styles import getSampleStyleSheet
-from reportlab.lib.pagesizes import A4
 
 # =============================
 # GEMINI CONFIG (FREE TIER SAFE)
@@ -135,42 +132,34 @@ Interview Analysis:
     return response.text
 
 # =============================
-# PDF GENERATION
+# TEXT REPORT GENERATION (NO PDF)
 # =============================
-def generate_feedback_pdf(summary: dict, ai_feedback: str) -> str:
-    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
-    pdf_path = temp_file.name
+def generate_feedback_text(summary: dict, ai_feedback: str) -> str:
+    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".txt")
+    path = temp_file.name
 
-    styles = getSampleStyleSheet()
-    doc = SimpleDocTemplate(pdf_path, pagesize=A4)
-    content = []
+    with open(path, "w") as f:
+        f.write("INTERVIEW PERFORMANCE REPORT\n")
+        f.write("=" * 32 + "\n\n")
+        f.write(f"Overall Score: {summary['final_score']}%\n\n")
 
-    content.append(Paragraph("<b>Interview Performance Report</b>", styles["Title"]))
-    content.append(Spacer(1, 12))
+        f.write("Scores:\n")
+        f.write(f"- Communication: {summary['communication_score']}%\n")
+        f.write(f"- Interview Skills: {summary['skill_score']}%\n\n")
 
-    content.append(Paragraph(f"<b>Overall Score:</b> {summary['final_score']}%", styles["Normal"]))
-    content.append(Spacer(1, 8))
+        f.write("Personality Signals:\n")
+        for k, v in summary["personality"].items():
+            f.write(f"- {k}: {v}\n")
 
-    content.append(Paragraph("<b>Scores</b>", styles["Heading2"]))
-    content.append(Paragraph(f"Communication: {summary['communication_score']}%", styles["Normal"]))
-    content.append(Paragraph(f"Interview Skills: {summary['skill_score']}%", styles["Normal"]))
+        f.write("\nAI Coach Feedback:\n")
+        f.write(ai_feedback)
 
-    content.append(Spacer(1, 8))
-    content.append(Paragraph("<b>Personality Signals</b>", styles["Heading2"]))
-    for k, v in summary["personality"].items():
-        content.append(Paragraph(f"{k}: {v}", styles["Normal"]))
-
-    content.append(Spacer(1, 12))
-    content.append(Paragraph("<b>AI Coach Feedback</b>", styles["Heading2"]))
-    content.append(Paragraph(ai_feedback.replace("\n", "<br/>"), styles["Normal"]))
-
-    doc.build(content)
-    return pdf_path
+    return path
 
 # =============================
 # EMAIL SENDER
 # =============================
-def send_email_with_pdf(pdf_path: str):
+def send_email_with_attachment(file_path: str):
     msg = EmailMessage()
     msg["Subject"] = "Your Interview Feedback Report"
     msg["From"] = st.secrets["EMAIL_ADDRESS"]
@@ -180,12 +169,12 @@ def send_email_with_pdf(pdf_path: str):
         "Hi,\n\nAttached is your interview feedback report.\n\nBest,\nInterview Analyzer"
     )
 
-    with open(pdf_path, "rb") as f:
+    with open(file_path, "rb") as f:
         msg.add_attachment(
             f.read(),
-            maintype="application",
-            subtype="pdf",
-            filename="Interview_Feedback.pdf"
+            maintype="text",
+            subtype="plain",
+            filename="Interview_Feedback.txt"
         )
 
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
@@ -243,9 +232,9 @@ if uploaded_file:
     if st.session_state.ai_feedback:
         st.write(st.session_state.ai_feedback)
 
-        if st.button("📧 Email me the feedback as PDF"):
-            with st.spinner("Generating PDF and sending email..."):
-                pdf_path = generate_feedback_pdf(
+        if st.button("📧 Email me the feedback"):
+            with st.spinner("Sending email..."):
+                report_path = generate_feedback_text(
                     summary={
                         "communication_score": comm,
                         "skill_score": skill,
@@ -254,5 +243,5 @@ if uploaded_file:
                     },
                     ai_feedback=st.session_state.ai_feedback
                 )
-                send_email_with_pdf(pdf_path)
+                send_email_with_attachment(report_path)
                 st.success("Email sent successfully 📬")
