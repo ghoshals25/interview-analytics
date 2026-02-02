@@ -2,12 +2,12 @@ import streamlit as st
 import docx
 from pathlib import Path
 import re
-from openai import OpenAI
+from groq import Groq
 
 # =============================
-# OPENAI CLIENT (SAFE)
+# GROQ CLIENT (FREE API)
 # =============================
-client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 
 # =============================
 # READ TRANSCRIPT
@@ -122,8 +122,7 @@ def overall_interview_score(comm, skill, personality):
 # FEATURE 1: KEYWORD EVIDENCE
 # =============================
 def extract_keyword_hits(text, keywords, max_hits=5):
-    hits = [k for k in keywords if k in text]
-    return hits[:max_hits]
+    return [k for k in keywords if k in text][:max_hits]
 
 SIGNAL_EXPLANATIONS = {
     "percent": "Shows quantified impact",
@@ -137,7 +136,7 @@ SIGNAL_EXPLANATIONS = {
 }
 
 # =============================
-# GENAI FEATURE: AI COACH
+# GENAI FEATURE (GROQ)
 # =============================
 def generate_ai_feedback(summary: dict) -> str:
     prompt = f"""
@@ -158,14 +157,15 @@ Interview Analysis:
 - Weak signals: {summary['weak_signals']}
 """
 
-   response = client.chat.completions.create(
-    model="llama3-8b-8192",
-    messages=[
-        {"role": "system", "content": "You are a helpful interview coach."},
-        {"role": "user", "content": prompt}
-    ],
-    temperature=0.4
-)
+    response = client.chat.completions.create(
+        model="llama3-8b-8192",
+        messages=[
+            {"role": "system", "content": "You are a helpful interview coach."},
+            {"role": "user", "content": prompt}
+        ],
+        temperature=0.4
+    )
+
     return response.choices[0].message.content.strip()
 
 # =============================
@@ -197,53 +197,42 @@ if uploaded_file:
             text, FILLER_WORDS + PERSONALITY_SIGNALS["Uncertainty"]
         )
 
-    # -----------------------------
-    # SCORES
-    # -----------------------------
+    # Scores
     st.subheader("📊 Scores")
     st.progress(final_score / 100)
     st.caption(f"Overall Interview Score: {final_score}%")
-
     st.metric("Communication", f"{comm}%")
     st.metric("Interview Skills", f"{skill}%")
 
-    # -----------------------------
-    # PERSONALITY
-    # -----------------------------
+    # Personality
     st.subheader("🧠 Personality Signals")
     for k, v in personality.items():
         st.write(f"**{k}**: {v}")
 
-    # -----------------------------
-    # FEATURE 1 OUTPUT
-    # -----------------------------
+    # Evidence
     st.subheader("🔍 Evidence from Your Answers")
+    for s in strong_signals:
+        st.write(f"✅ **{s}** — {SIGNAL_EXPLANATIONS.get(s, '')}")
+    for w in weak_signals:
+        st.write(f"⚠️ **{w}** — {SIGNAL_EXPLANATIONS.get(w, '')}")
 
-    if strong_signals:
-        for s in strong_signals:
-            st.write(f"✅ **{s}** — {SIGNAL_EXPLANATIONS.get(s, '')}")
-    else:
-        st.write("No strong evidence detected")
-
-    if weak_signals:
-        for w in weak_signals:
-            st.write(f"⚠️ **{w}** — {SIGNAL_EXPLANATIONS.get(w, '')}")
-    else:
-        st.write("No major issues detected")
-
-    # -----------------------------
-    # GENAI FEEDBACK
-    # -----------------------------
-    summary = {
-        "communication_score": comm,
-        "skill_score": skill,
-        "personality": personality,
-        "strong_signals": strong_signals,
-        "weak_signals": weak_signals
-    }
-
-    with st.spinner("Generating AI feedback..."):
-        ai_feedback = generate_ai_feedback(summary)
-
+    # GenAI (cached)
     st.subheader("🤖 AI Interview Coach Feedback")
-    st.write(ai_feedback)
+
+    if "ai_feedback" not in st.session_state:
+        try:
+            with st.spinner("Generating AI feedback..."):
+                st.session_state.ai_feedback = generate_ai_feedback({
+                    "communication_score": comm,
+                    "skill_score": skill,
+                    "personality": personality,
+                    "strong_signals": strong_signals,
+                    "weak_signals": weak_signals
+                })
+        except Exception:
+            st.session_state.ai_feedback = None
+
+    if st.session_state.ai_feedback:
+        st.write(st.session_state.ai_feedback)
+    else:
+        st.warning("AI feedback temporarily unavailable (free API limit).")
