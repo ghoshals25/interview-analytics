@@ -8,7 +8,7 @@ import google.generativeai as genai
 # GEMINI CONFIG (FREE)
 # =============================
 genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-gemini_model = genai.GenerativeModel("gemini-1.5-flash")
+gemini_model = genai.GenerativeModel("gemini-2.0-flash")
 
 # =============================
 # SESSION STATE GUARD (CRITICAL)
