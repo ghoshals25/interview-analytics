@@ -2,15 +2,16 @@ import streamlit as st
 import docx
 from pathlib import Path
 import re
-from groq import Groq
+import google.generativeai as genai
 
 # =============================
-# GROQ CLIENT (FREE TIER)
+# GEMINI CONFIG (FREE)
 # =============================
-client = Groq(api_key=st.secrets["GROQ_API_KEY"])
+genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+gemini_model = genai.GenerativeModel("gemini-1.5-flash")
 
 # =============================
-# SESSION STATE GUARD
+# SESSION STATE GUARD (CRITICAL)
 # =============================
 if "ai_feedback" not in st.session_state:
     st.session_state.ai_feedback = None
@@ -112,33 +113,16 @@ def overall_interview_score(comm, skill, personality):
     )
 
 # =============================
-# EVIDENCE EXTRACTION
-# =============================
-def extract_keyword_hits(text, keywords, max_hits=5):
-    return [k for k in keywords if k in text][:max_hits]
-
-SIGNAL_EXPLANATIONS = {
-    "percent": "Shows quantified impact",
-    "reduced": "Demonstrates efficiency",
-    "improved": "Continuous improvement",
-    "impact": "Outcome-focused language",
-    "for example": "Structured explanation",
-    "um": "Verbal filler",
-    "like": "Informal filler",
-    "maybe": "Signals uncertainty"
-}
-
-# =============================
-# GENAI (GROQ)
+# GENAI (GEMINI) — SINGLE CALL
 # =============================
 def generate_ai_feedback(summary: dict) -> str:
     prompt = f"""
 You are an experienced interview coach.
 
-Provide:
+Based on the analysis below, provide:
 1. Overall assessment (2–3 sentences)
 2. 2–3 strengths
-3. 2 actionable improvements
+3. 2 concrete, actionable improvements
 
 Interview Analysis:
 - Communication: {summary['communication_score']}%
@@ -148,21 +132,13 @@ Interview Analysis:
 - Weak signals: {summary['weak_signals']}
 """
 
-    response = client.chat.completions.create(
-        model="llama3-8b-8192",
-        messages=[
-            {"role": "system", "content": "You are a helpful interview coach."},
-            {"role": "user", "content": prompt}
-        ],
-        temperature=0.4
-    )
-
-    return response.choices[0].message.content.strip()
+    response = gemini_model.generate_content(prompt)
+    return response.text
 
 # =============================
 # STREAMLIT UI
 # =============================
-st.set_page_config("Interview Analyzer", layout="centered")
+st.set_page_config(page_title="Interview Analyzer", layout="centered")
 st.title("🎯 Interview Performance Analyzer")
 
 uploaded_file = st.file_uploader(
@@ -178,8 +154,8 @@ if uploaded_file:
     personality = personality_analysis(text)
     final_score = overall_interview_score(comm, skill, personality)
 
-    strong = extract_keyword_hits(text, IMPACT_WORDS + EXAMPLE_PHRASES + PROBLEM_WORDS)
-    weak = extract_keyword_hits(text, FILLER_WORDS + PERSONALITY_SIGNALS["Uncertainty"])
+    strong = [k for k in IMPACT_WORDS + EXAMPLE_PHRASES + PROBLEM_WORDS if k in text][:5]
+    weak = [k for k in FILLER_WORDS + PERSONALITY_SIGNALS["Uncertainty"] if k in text][:5]
 
     # Scores
     st.subheader("📊 Scores")
@@ -193,14 +169,7 @@ if uploaded_file:
     for k, v in personality.items():
         st.write(f"**{k}**: {v}")
 
-    # Evidence
-    st.subheader("🔍 Evidence from Your Answers")
-    for s in strong:
-        st.write(f"✅ **{s}** — {SIGNAL_EXPLANATIONS.get(s, '')}")
-    for w in weak:
-        st.write(f"⚠️ **{w}** — {SIGNAL_EXPLANATIONS.get(w, '')}")
-
-    # AI Feedback (single-call only)
+    # AI FEEDBACK (STRICTLY ONCE)
     st.subheader("🤖 AI Interview Coach Feedback")
 
     if not st.session_state.ai_attempted:
@@ -214,10 +183,11 @@ if uploaded_file:
                     "strong_signals": strong,
                     "weak_signals": weak
                 })
-        except Exception:
+        except Exception as e:
+            st.error(f"Gemini error: {e}")
             st.session_state.ai_feedback = None
 
     if st.session_state.ai_feedback:
         st.write(st.session_state.ai_feedback)
     else:
-        st.warning("AI feedback temporarily unavailable (free API limit). Try again later.")
+        st.warning("AI feedback unavailable. Please refresh and try again.")
