@@ -2,16 +2,23 @@ import streamlit as st
 import docx
 from pathlib import Path
 import re
+import tempfile
+import smtplib
+from email.message import EmailMessage
+
 import google.generativeai as genai
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.pagesizes import A4
 
 # =============================
-# GEMINI CONFIG (FREE)
+# GEMINI CONFIG (FREE TIER SAFE)
 # =============================
 genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 gemini_model = genai.GenerativeModel("gemini-2.5-flash-lite")
 
 # =============================
-# SESSION STATE GUARD (CRITICAL)
+# SESSION STATE
 # =============================
 if "ai_feedback" not in st.session_state:
     st.session_state.ai_feedback = None
@@ -36,10 +43,7 @@ def read_transcript(uploaded_file) -> str:
 # =============================
 # COMMUNICATION ANALYSIS
 # =============================
-FILLER_WORDS = [
-    "um", "uh", "like", "you know",
-    "basically", "sort of", "kind of"
-]
+FILLER_WORDS = ["um", "uh", "like", "you know", "basically", "sort of", "kind of"]
 
 def communication_score(text: str) -> float:
     words = text.split()
@@ -57,20 +61,9 @@ def communication_score(text: str) -> float:
 # =============================
 # INTERVIEW SKILLS
 # =============================
-EXAMPLE_PHRASES = [
-    "for example", "for instance",
-    "when i", "i worked on", "i was responsible for"
-]
-
-IMPACT_WORDS = [
-    "%", "percent", "increased",
-    "reduced", "improved", "delivered", "impact"
-]
-
-PROBLEM_WORDS = [
-    "problem", "challenge", "solution",
-    "approach", "resolved"
-]
+EXAMPLE_PHRASES = ["for example", "for instance", "when i", "i worked on", "i was responsible for"]
+IMPACT_WORDS = ["%", "percent", "increased", "reduced", "improved", "delivered", "impact"]
+PROBLEM_WORDS = ["problem", "challenge", "solution", "approach", "resolved"]
 
 def interview_skill_score(text: str) -> float:
     score = 0
@@ -113,7 +106,7 @@ def overall_interview_score(comm, skill, personality):
     )
 
 # =============================
-# GENAI (GEMINI) — SINGLE CALL
+# AI FEEDBACK
 # =============================
 def generate_ai_feedback(summary: dict) -> str:
     prompt = f"""
@@ -132,8 +125,75 @@ Interview Analysis:
 - Weak signals: {summary['weak_signals']}
 """
 
-    response = gemini_model.generate_content(prompt)
+    response = gemini_model.generate_content(
+        prompt,
+        generation_config={
+            "temperature": 0.3,
+            "max_output_tokens": 400
+        }
+    )
     return response.text
+
+# =============================
+# PDF GENERATION
+# =============================
+def generate_feedback_pdf(summary: dict, ai_feedback: str) -> str:
+    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+    pdf_path = temp_file.name
+
+    styles = getSampleStyleSheet()
+    doc = SimpleDocTemplate(pdf_path, pagesize=A4)
+    content = []
+
+    content.append(Paragraph("<b>Interview Performance Report</b>", styles["Title"]))
+    content.append(Spacer(1, 12))
+
+    content.append(Paragraph(f"<b>Overall Score:</b> {summary['final_score']}%", styles["Normal"]))
+    content.append(Spacer(1, 8))
+
+    content.append(Paragraph("<b>Scores</b>", styles["Heading2"]))
+    content.append(Paragraph(f"Communication: {summary['communication_score']}%", styles["Normal"]))
+    content.append(Paragraph(f"Interview Skills: {summary['skill_score']}%", styles["Normal"]))
+
+    content.append(Spacer(1, 8))
+    content.append(Paragraph("<b>Personality Signals</b>", styles["Heading2"]))
+    for k, v in summary["personality"].items():
+        content.append(Paragraph(f"{k}: {v}", styles["Normal"]))
+
+    content.append(Spacer(1, 12))
+    content.append(Paragraph("<b>AI Coach Feedback</b>", styles["Heading2"]))
+    content.append(Paragraph(ai_feedback.replace("\n", "<br/>"), styles["Normal"]))
+
+    doc.build(content)
+    return pdf_path
+
+# =============================
+# EMAIL SENDER
+# =============================
+def send_email_with_pdf(pdf_path: str):
+    msg = EmailMessage()
+    msg["Subject"] = "Your Interview Feedback Report"
+    msg["From"] = st.secrets["EMAIL_ADDRESS"]
+    msg["To"] = st.secrets["EMAIL_ADDRESS"]
+
+    msg.set_content(
+        "Hi,\n\nAttached is your interview feedback report.\n\nBest,\nInterview Analyzer"
+    )
+
+    with open(pdf_path, "rb") as f:
+        msg.add_attachment(
+            f.read(),
+            maintype="application",
+            subtype="pdf",
+            filename="Interview_Feedback.pdf"
+        )
+
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+        server.login(
+            st.secrets["EMAIL_ADDRESS"],
+            st.secrets["EMAIL_APP_PASSWORD"]
+        )
+        server.send_message(msg)
 
 # =============================
 # STREAMLIT UI
@@ -157,37 +217,42 @@ if uploaded_file:
     strong = [k for k in IMPACT_WORDS + EXAMPLE_PHRASES + PROBLEM_WORDS if k in text][:5]
     weak = [k for k in FILLER_WORDS + PERSONALITY_SIGNALS["Uncertainty"] if k in text][:5]
 
-    # Scores
     st.subheader("📊 Scores")
     st.progress(final_score / 100)
     st.caption(f"Overall Score: {final_score}%")
     st.metric("Communication", f"{comm}%")
     st.metric("Interview Skills", f"{skill}%")
 
-    # Personality
     st.subheader("🧠 Personality Signals")
     for k, v in personality.items():
         st.write(f"**{k}**: {v}")
 
-    # AI FEEDBACK (STRICTLY ONCE)
     st.subheader("🤖 AI Interview Coach Feedback")
 
     if not st.session_state.ai_attempted:
         st.session_state.ai_attempted = True
-        try:
-            with st.spinner("Generating AI feedback..."):
-                st.session_state.ai_feedback = generate_ai_feedback({
-                    "communication_score": comm,
-                    "skill_score": skill,
-                    "personality": personality,
-                    "strong_signals": strong,
-                    "weak_signals": weak
-                })
-        except Exception as e:
-            st.error(f"Gemini error: {e}")
-            st.session_state.ai_feedback = None
+        with st.spinner("Generating AI feedback..."):
+            st.session_state.ai_feedback = generate_ai_feedback({
+                "communication_score": comm,
+                "skill_score": skill,
+                "personality": personality,
+                "strong_signals": strong,
+                "weak_signals": weak
+            })
 
     if st.session_state.ai_feedback:
         st.write(st.session_state.ai_feedback)
-    else:
-        st.warning("AI feedback unavailable. Please refresh and try again.")
+
+        if st.button("📧 Email me the feedback as PDF"):
+            with st.spinner("Generating PDF and sending email..."):
+                pdf_path = generate_feedback_pdf(
+                    summary={
+                        "communication_score": comm,
+                        "skill_score": skill,
+                        "personality": personality,
+                        "final_score": final_score
+                    },
+                    ai_feedback=st.session_state.ai_feedback
+                )
+                send_email_with_pdf(pdf_path)
+                st.success("Email sent successfully 📬")
