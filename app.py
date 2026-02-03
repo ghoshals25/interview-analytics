@@ -5,22 +5,26 @@ import re
 import smtplib
 from email.message import EmailMessage
 import google.generativeai as genai
+from google.api_core.exceptions import ResourceExhausted
 
 # =============================
-# CONSTANTS
+# CONSTANTS / FEATURE FLAGS
 # =============================
 SENDER_EMAIL = "soumikghoshalireland@gmail.com"
-LLM_ENABLED = True
 EMAIL_REGEX = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
 
-# =============================
-# GEMINI CONFIG
-# =============================
-genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-gemini_model = genai.GenerativeModel("gemini-2.5-flash-lite")
+# 🔒 Gemini is DISABLED
+LLM_ENABLED = False
 
 # =============================
-# GEMINI PROMPTS
+# GEMINI CONFIG (INACTIVE)
+# =============================
+if LLM_ENABLED:
+    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+    gemini_model = genai.GenerativeModel("gemini-2.5-flash-lite")
+
+# =============================
+# GEMINI PROMPTS (UNCHANGED)
 # =============================
 COMMON_GEMINI_CONSTRAINTS = """
 NON-NEGOTIABLE RULES:
@@ -74,7 +78,7 @@ def read_transcript(uploaded_file):
     return uploaded_file.read().decode("utf-8", errors="ignore").lower()
 
 # =============================
-# ANALYSIS LOGIC
+# ANALYSIS LOGIC (UNCHANGED)
 # =============================
 FILLER_WORDS = ["um", "uh", "like", "you know"]
 IMPACT_WORDS = ["%", "increased", "reduced", "improved"]
@@ -95,18 +99,13 @@ def overall_interview_score(comm, skill):
     return round(comm * 0.4 + skill * 0.6, 2)
 
 # =============================
-# GEMINI HELPER
+# GEMINI HELPER (DISABLED)
 # =============================
 def call_gemini(prompt):
-    if not LLM_ENABLED:
-        return "LLM disabled"
-    return gemini_model.generate_content(
-        prompt,
-        generation_config={"temperature": 0.2, "max_output_tokens": 300}
-    ).text
+    return "AI interpretation disabled."
 
 # =============================
-# EMAIL HELPERS (FIXED)
+# EMAIL HELPERS (SAFE)
 # =============================
 def is_valid_email(email):
     return email and re.match(EMAIL_REGEX, email)
@@ -150,18 +149,10 @@ if uploaded_file:
     st.metric("Interview Skills", f"{skill}%")
 
     # -------------------------------------------------
-    # 2️⃣ GEMINI SYSTEM INTERPRETATION
+    # 2️⃣ SYSTEM INTERPRETATION (STATIC)
     # -------------------------------------------------
     if st.session_state.system_summary is None:
-        prompt = f"""
-SCORES:
-Overall: {final_score}%
-Communication: {comm}%
-Skills: {skill}%
-
-{GEMINI_SYSTEM_SUMMARY_PROMPT}
-"""
-        st.session_state.system_summary = call_gemini(prompt)
+        st.session_state.system_summary = call_gemini("")
 
     st.subheader("🧠 System Interpretation")
     st.write(st.session_state.system_summary)
@@ -181,36 +172,16 @@ Skills: {skill}%
     # -------------------------------------------------
     if interviewer_fit != "Select" and interviewer_comments:
         if st.session_state.comparison is None:
-            comparison_prompt = f"""
-SYSTEM SCORE: {final_score}%
-SYSTEM INTERPRETATION:
-{st.session_state.system_summary}
-
-INTERVIEWER INPUT:
-{interviewer_fit}
-{interviewer_comments}
-
-Compare alignment and gaps.
-"""
-            st.session_state.comparison = call_gemini(comparison_prompt)
+            st.session_state.comparison = call_gemini("")
 
         st.subheader("🔍 System vs Interviewer Comparison")
         st.write(st.session_state.comparison)
 
         # -------------------------------------------------
-        # 5️⃣ INTERVIEWER COACHING FEEDBACK
+        # 5️⃣ INTERVIEWER COACHING (DISABLED)
         # -------------------------------------------------
         if st.session_state.interviewer_feedback is None:
-            coaching_prompt = f"""
-INTERVIEW TRANSCRIPT:
-{text}
-
-INTERVIEWER COMMENTS:
-{interviewer_comments}
-
-{GEMINI_INTERVIEWER_COACHING_PROMPT}
-"""
-            st.session_state.interviewer_feedback = call_gemini(coaching_prompt)
+            st.session_state.interviewer_feedback = call_gemini("")
 
         st.subheader("🧑‍🏫 Interviewer Coaching (Preview)")
         st.write(st.session_state.interviewer_feedback)
@@ -235,7 +206,7 @@ INTERVIEWER COMMENTS:
 
             send_email(
                 "HR Interview Summary",
-                st.session_state.system_summary + "\n\n" + st.session_state.comparison,
+                st.session_state.system_summary + "\n\n" + str(st.session_state.comparison),
                 hr_email
             )
 
@@ -247,7 +218,7 @@ INTERVIEWER COMMENTS:
 
             send_email(
                 "Interview Coaching Feedback (Private)",
-                st.session_state.interviewer_feedback,
+                str(st.session_state.interviewer_feedback),
                 interviewer_email
             )
 
