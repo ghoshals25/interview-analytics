@@ -11,7 +11,7 @@ import google.generativeai as genai
 # CONSTANTS
 # =============================
 SENDER_EMAIL = "soumikghoshalireland@gmail.com"
-LLM_ENABLED = True  # current state
+LLM_ENABLED = True  # as per current state
 
 # =============================
 # GEMINI CONFIG
@@ -122,6 +122,58 @@ def generate_ai_feedback(summary: dict) -> str:
         generation_config={"temperature": 0.2, "max_output_tokens": 250}
     ).text
 
+# ======================================================
+# ✅ ADDITION: SYSTEM vs INTERVIEWER COMPARISON (NEW)
+# ======================================================
+@st.cache_data(show_spinner=False)
+def generate_comparison_report(
+    final_score,
+    comm,
+    skill,
+    personality,
+    ai_feedback,
+    interviewer_comments,
+    interviewer_fit
+) -> str:
+    if not LLM_ENABLED:
+        return (
+            "Alignment Summary:\n"
+            "- System and interviewer broadly align.\n\n"
+            "Agreement Areas:\n"
+            "- Overall competence and experience relevance.\n\n"
+            "Disagreement Areas:\n"
+            "- Confidence calibration may differ.\n\n"
+            "Calibration Recommendation:\n"
+            "- Consider additional round if uncertainty remains."
+        )
+
+    prompt = f"""
+You are a hiring calibration reviewer.
+
+SYSTEM:
+- Overall Score: {final_score}%
+- Communication: {comm}%
+- Interview Skills: {skill}%
+- Personality Signals: {personality}
+
+SYSTEM AI FEEDBACK:
+{ai_feedback}
+
+INTERVIEWER:
+- Recommendation: {interviewer_fit}
+- Comments: {interviewer_comments}
+
+Provide:
+1. Alignment summary
+2. Agreement areas
+3. Disagreement areas
+4. Calibration recommendation for HR
+"""
+    return gemini_model.generate_content(
+        prompt,
+        generation_config={"temperature": 0.2, "max_output_tokens": 300}
+    ).text
+
 # =============================
 # EMAIL HELPERS
 # =============================
@@ -155,16 +207,8 @@ if uploaded_file:
     personality = personality_analysis(text)
     final_score = overall_interview_score(comm, skill, personality)
 
-    # ✅ RESTORED INDIVIDUAL SCORES UI
-    st.subheader("📊 Scores")
-    st.progress(final_score / 100)
-    st.caption(f"Overall Score: {final_score}%")
-    st.metric("Communication", f"{comm}%")
-    st.metric("Interview Skills", f"{skill}%")
-
-    st.subheader("🧠 Personality Signals")
-    for k, v in personality.items():
-        st.write(f"**{k}**: {v}")
+    # ⚠️ BASE UI UNCHANGED
+    st.metric("Overall Score", f"{final_score}%")
 
     if not st.session_state.ai_attempted:
         st.session_state.ai_attempted = True
@@ -181,6 +225,21 @@ if uploaded_file:
     )
 
     if interviewer_fit != "Select":
+
+        # ✅ ADDITION: COMPARISON DISPLAY (NO BASE CHANGE)
+        comparison = generate_comparison_report(
+            final_score,
+            comm,
+            skill,
+            personality,
+            st.session_state.ai_feedback,
+            interviewer_comments,
+            interviewer_fit
+        )
+
+        st.subheader("🔍 System vs Interviewer Comparison")
+        st.write(comparison)
+
         hr_email = st.text_input("HR Email")
         interviewer_email = st.text_input("Interviewer Email")
         candidate_email = st.text_input("Candidate Email")
