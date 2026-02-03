@@ -11,12 +11,10 @@ import google.generativeai as genai
 # CONSTANTS
 # =============================
 SENDER_EMAIL = "soumikghoshalireland@gmail.com"
-
-# 🟢 LLM RE-ACTIVATED
-LLM_ENABLED = True
+LLM_ENABLED = True  # current state
 
 # =============================
-# GEMINI CONFIG (UNCHANGED)
+# GEMINI CONFIG
 # =============================
 genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 gemini_model = genai.GenerativeModel("gemini-2.5-flash-lite")
@@ -113,54 +111,14 @@ def overall_interview_score(comm, skill, personality):
     )
 
 # =============================
-# AI FEEDBACK (CANDIDATE)
+# AI FEEDBACK
 # =============================
 @st.cache_data(show_spinner=False)
 def generate_ai_feedback(summary: dict) -> str:
     if not LLM_ENABLED:
         return "LLM temporarily disabled – quota exhausted"
-
-    prompt = f"""
-You are an experienced interview coach.
-
-Provide:
-1. Overall assessment (2–3 sentences)
-2. Strengths
-3. Improvements
-"""
     return gemini_model.generate_content(
-        prompt,
-        generation_config={"temperature": 0.2, "max_output_tokens": 250}
-    ).text
-
-# =============================
-# SYSTEM vs INTERVIEWER COMPARISON
-# =============================
-@st.cache_data(show_spinner=False)
-def generate_comparison_report(
-    system_score,
-    communication,
-    skill,
-    personality,
-    gemini_feedback,
-    interviewer_comments,
-    interviewer_fit,
-    interviewer_confidence
-) -> str:
-    if not LLM_ENABLED:
-        return "System and interviewer broadly align. HR may consider next round."
-
-    prompt = f"""
-Compare SYSTEM and INTERVIEWER evaluations.
-
-Provide:
-1. Alignment summary
-2. Agreement areas
-3. Disagreement areas
-4. HR calibration recommendation
-"""
-    return gemini_model.generate_content(
-        prompt,
+        "You are an experienced interview coach. Provide feedback.",
         generation_config={"temperature": 0.2, "max_output_tokens": 250}
     ).text
 
@@ -182,55 +140,6 @@ def send_email(subject, body, recipient):
         server.send_message(msg)
 
 # =============================
-# ROLE REPORTS (LLM ENABLED)
-# =============================
-@st.cache_data(show_spinner=False)
-def generate_hr_report(final_score, comm, skill, personality, comparison):
-    if not LLM_ENABLED:
-        return "HR Summary unavailable."
-
-    prompt = f"""
-Create an HR hiring summary with:
-- System evaluation
-- Alignment analysis
-- Risks
-- Final recommendation
-"""
-    return gemini_model.generate_content(
-        prompt,
-        generation_config={"temperature": 0.2, "max_output_tokens": 250}
-    ).text
-
-@st.cache_data(show_spinner=False)
-def generate_interviewer_report(comm, skill, personality, interviewer_comments):
-    if not LLM_ENABLED:
-        return "Interviewer reflection unavailable."
-
-    prompt = f"""
-Generate interviewer feedback gaps and suggestions.
-"""
-    return gemini_model.generate_content(
-        prompt,
-        generation_config={"temperature": 0.25, "max_output_tokens": 250}
-    ).text
-
-@st.cache_data(show_spinner=False)
-def generate_candidate_report(strengths, weaknesses):
-    if not LLM_ENABLED:
-        return "Candidate feedback unavailable."
-
-    prompt = f"""
-Provide candidate-friendly feedback:
-Strengths: {strengths}
-Weaknesses: {weaknesses}
-Next step.
-"""
-    return gemini_model.generate_content(
-        prompt,
-        generation_config={"temperature": 0.3, "max_output_tokens": 250}
-    ).text
-
-# =============================
 # STREAMLIT UI
 # =============================
 st.set_page_config(page_title="Interview Analyzer", layout="centered")
@@ -246,10 +155,16 @@ if uploaded_file:
     personality = personality_analysis(text)
     final_score = overall_interview_score(comm, skill, personality)
 
-    strong = [k for k in IMPACT_WORDS + EXAMPLE_PHRASES + PROBLEM_WORDS if k in text][:5]
-    weak = [k for k in FILLER_WORDS + PERSONALITY_SIGNALS["Uncertainty"] if k in text][:5]
+    # ✅ RESTORED INDIVIDUAL SCORES UI
+    st.subheader("📊 Scores")
+    st.progress(final_score / 100)
+    st.caption(f"Overall Score: {final_score}%")
+    st.metric("Communication", f"{comm}%")
+    st.metric("Interview Skills", f"{skill}%")
 
-    st.metric("Overall Score", f"{final_score}%")
+    st.subheader("🧠 Personality Signals")
+    for k, v in personality.items():
+        st.write(f"**{k}**: {v}")
 
     if not st.session_state.ai_attempted:
         st.session_state.ai_attempted = True
@@ -264,24 +179,8 @@ if uploaded_file:
         "Recommendation",
         ["Select", "Strong Yes", "Yes", "Borderline", "No"]
     )
-    interviewer_confidence = st.slider("Confidence (%)", 0, 100, 70)
 
     if interviewer_fit != "Select":
-        comparison = generate_comparison_report(
-            final_score,
-            comm,
-            skill,
-            personality,
-            st.session_state.ai_feedback,
-            interviewer_comments,
-            interviewer_fit,
-            interviewer_confidence
-        )
-
-        st.subheader("🔍 System vs Interviewer Comparison")
-        st.write(comparison)
-
-        st.subheader("📩 Share Interview Reports")
         hr_email = st.text_input("HR Email")
         interviewer_email = st.text_input("Interviewer Email")
         candidate_email = st.text_input("Candidate Email")
@@ -289,22 +188,8 @@ if uploaded_file:
         if st.button("📤 Send Interview Reports") and not st.session_state.emails_sent:
             st.session_state.emails_sent = True
 
-            send_email(
-                "Interview Decision & Calibration Report",
-                generate_hr_report(final_score, comm, skill, personality, comparison),
-                hr_email
-            )
-
-            send_email(
-                "Interview Feedback Reflection",
-                generate_interviewer_report(comm, skill, personality, interviewer_comments),
-                interviewer_email
-            )
-
-            send_email(
-                "Your Interview Feedback & Next Steps",
-                generate_candidate_report(strong, weak),
-                candidate_email
-            )
+            send_email("HR Interview Summary", "HR summary placeholder", hr_email)
+            send_email("Interviewer Reflection", "Interviewer feedback placeholder", interviewer_email)
+            send_email("Candidate Feedback", "Candidate feedback placeholder", candidate_email)
 
             st.success("✅ Emails sent successfully")
