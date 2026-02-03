@@ -28,6 +28,16 @@ if "ai_feedback" not in st.session_state:
     st.session_state.ai_attempted = False
 
 # =============================
+# 🆕 INTERVIEWER SESSION STATE (STEP 1)
+# =============================
+if "interviewer_input" not in st.session_state:
+    st.session_state.interviewer_input = {
+        "comments": "",
+        "fit": None,
+        "confidence": None
+    }
+
+# =============================
 # READ TRANSCRIPT
 # =============================
 def read_transcript(uploaded_file) -> str:
@@ -127,74 +137,32 @@ Interview Analysis:
 - Strong signals: {summary['strong_signals']}
 - Weak signals: {summary['weak_signals']}
 """
-
     response = gemini_model.generate_content(
         prompt,
-        generation_config={
-            "temperature": 0.3,
-            "max_output_tokens": 400
-        }
+        generation_config={"temperature": 0.3, "max_output_tokens": 400}
     )
     return response.text
 
 # =============================
-# TEXT REPORT GENERATION
+# EMAIL HELPERS (UNCHANGED)
 # =============================
-def generate_feedback_text(summary: dict, ai_feedback: str) -> str:
-    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".txt")
-    path = temp_file.name
+def is_valid_email(email: str) -> bool:
+    return regex.match(r"^[\w\.-]+@[\w\.-]+\.\w+$", email) is not None
 
-    with open(path, "w") as f:
-        f.write("INTERVIEW PERFORMANCE REPORT\n")
-        f.write("=" * 32 + "\n\n")
-        f.write(f"Overall Score: {summary['final_score']}%\n\n")
-
-        f.write("Scores:\n")
-        f.write(f"- Communication: {summary['communication_score']}%\n")
-        f.write(f"- Interview Skills: {summary['skill_score']}%\n\n")
-
-        f.write("Personality Signals:\n")
-        for k, v in summary["personality"].items():
-            f.write(f"- {k}: {v}\n")
-
-        f.write("\nAI Coach Feedback:\n")
-        f.write(ai_feedback)
-
-    return path
-
-# =============================
-# EMAIL SENDER (FIXED FROM, USER TO)
-# =============================
 def send_email_to_user(file_path: str, user_email: str):
     msg = EmailMessage()
     msg["Subject"] = "Your Interview Feedback Report"
     msg["From"] = SENDER_EMAIL
     msg["To"] = user_email
 
-    msg.set_content(
-        "Hi,\n\nAttached is your interview feedback report.\n\nBest,\nSoumik"
-    )
+    msg.set_content("Hi,\n\nAttached is your interview feedback report.\n\nBest,\nSoumik")
 
     with open(file_path, "rb") as f:
-        msg.add_attachment(
-            f.read(),
-            maintype="text",
-            subtype="plain",
-            filename="Interview_Feedback.txt"
-        )
+        msg.add_attachment(f.read(), maintype="text", subtype="plain", filename="Interview_Feedback.txt")
 
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-        server.login(
-            SENDER_EMAIL,
-            st.secrets["EMAIL_APP_PASSWORD"]
-        )
+        server.login(SENDER_EMAIL, st.secrets["EMAIL_APP_PASSWORD"])
         server.send_message(msg)
-
-# =============================
-# EMAIL VALIDATION
-# =============================
-def is_valid_email(email: str) -> bool:
-    return regex.match(r"^[\w\.-]+@[\w\.-]+\.\w+$", email) is not None
 
 # =============================
 # STREAMLIT UI
@@ -202,10 +170,7 @@ def is_valid_email(email: str) -> bool:
 st.set_page_config(page_title="Interview Analyzer", layout="centered")
 st.title("🎯 Interview Performance Analyzer")
 
-uploaded_file = st.file_uploader(
-    "Upload Interview Transcript (.txt or .docx)",
-    type=["txt", "docx"]
-)
+uploaded_file = st.file_uploader("Upload Interview Transcript (.txt or .docx)", ["txt", "docx"])
 
 if uploaded_file:
     text = read_transcript(uploaded_file)
@@ -232,17 +197,50 @@ if uploaded_file:
 
     if not st.session_state.ai_attempted:
         st.session_state.ai_attempted = True
-        with st.spinner("Generating AI feedback..."):
-            st.session_state.ai_feedback = generate_ai_feedback({
-                "communication_score": comm,
-                "skill_score": skill,
-                "personality": personality,
-                "strong_signals": strong,
-                "weak_signals": weak
-            })
+        st.session_state.ai_feedback = generate_ai_feedback({
+            "communication_score": comm,
+            "skill_score": skill,
+            "personality": personality,
+            "strong_signals": strong,
+            "weak_signals": weak
+        })
 
     if st.session_state.ai_feedback:
         st.write(st.session_state.ai_feedback)
+
+        # =============================
+        # 🆕 INTERVIEWER EVALUATION (STEP 1)
+        # =============================
+        st.subheader("🧑‍💼 Interviewer Evaluation")
+
+        interviewer_comments = st.text_area(
+            "Interviewer comments (strengths, concerns, examples)",
+            height=160,
+            value=st.session_state.interviewer_input["comments"]
+        )
+
+        interviewer_fit = st.selectbox(
+            "Overall interviewer recommendation",
+            ["Select", "Strong Yes", "Yes", "Borderline", "No"],
+            index=0 if st.session_state.interviewer_input["fit"] is None else
+            ["Select", "Strong Yes", "Yes", "Borderline", "No"].index(
+                st.session_state.interviewer_input["fit"]
+            )
+        )
+
+        interviewer_confidence = st.slider(
+            "Confidence in this recommendation (%)",
+            0, 100,
+            st.session_state.interviewer_input["confidence"] or 70
+        )
+
+        if interviewer_fit != "Select":
+            st.session_state.interviewer_input = {
+                "comments": interviewer_comments,
+                "fit": interviewer_fit,
+                "confidence": interviewer_confidence
+            }
+            st.success("✅ Interviewer input saved")
 
         st.subheader("📧 Email this report to me")
         user_email = st.text_input("Enter your email address")
@@ -251,15 +249,9 @@ if uploaded_file:
             if not is_valid_email(user_email):
                 st.error("Please enter a valid email address.")
             else:
-                with st.spinner("Sending email..."):
-                    report_path = generate_feedback_text(
-                        summary={
-                            "communication_score": comm,
-                            "skill_score": skill,
-                            "personality": personality,
-                            "final_score": final_score
-                        },
-                        ai_feedback=st.session_state.ai_feedback
-                    )
-                    send_email_to_user(report_path, user_email)
-                    st.success(f"Report sent to {user_email} 📬")
+                report_path = tempfile.NamedTemporaryFile(delete=False, suffix=".txt").name
+                with open(report_path, "w") as f:
+                    f.write(f"Overall Score: {final_score}%\n\n")
+                    f.write(st.session_state.ai_feedback)
+                send_email_to_user(report_path, user_email)
+                st.success(f"Report sent to {user_email} 📬")
