@@ -3,3 +3,4 @@ python-docx
 google-generativeai
 openai-whisper
 ffmpeg-python
+imageio-ffmpeg
