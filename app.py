@@ -7,7 +7,11 @@ from email.message import EmailMessage
 import tempfile
 import whisper
 import ffmpeg
+import imageio_ffmpeg
+import os
 
+# Force ffmpeg-python to use bundled ffmpeg binary
+os.environ["FFMPEG_BINARY"] = imageio_ffmpeg.get_ffmpeg_exe()
 # =============================
 # CONSTANTS
 # =============================
