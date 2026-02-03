@@ -20,6 +20,59 @@ genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 gemini_model = genai.GenerativeModel("gemini-2.5-flash-lite")
 
 # =============================
+# 🔹 ADDED: GEMINI PROMPTS (ALL PERSONAS)
+# =============================
+
+COMMON_GEMINI_CONSTRAINTS = """
+NON-NEGOTIABLE RULES:
+- Do NOT assign scores or numeric evaluations
+- Do NOT make hire / no-hire decisions
+- Do NOT invent skills or experiences
+- Base insights strictly on transcript & signals
+- Be concise and evidence-based
+"""
+
+GEMINI_HR_PROMPT = f"""
+You are generating a concise interview summary for HR.
+
+{COMMON_GEMINI_CONSTRAINTS}
+
+FORMAT:
+- Key Strengths
+- Key Concerns
+- Readiness Indicators
+- Suggested Next Steps
+
+Use bullets only.
+"""
+
+GEMINI_CANDIDATE_PROMPT = f"""
+You are generating respectful, growth-oriented feedback for a candidate.
+
+{COMMON_GEMINI_CONSTRAINTS}
+
+FORMAT:
+- Strengths Observed
+- Areas to Improve
+- Suggestions for Growth
+
+Avoid judgmental language.
+"""
+
+GEMINI_INTERVIEWER_PROMPT = f"""
+You are generating private interviewer feedback.
+
+{COMMON_GEMINI_CONSTRAINTS}
+
+FORMAT:
+### Interview Summary
+### System Feedback (Candidate Signals)
+### Interview Improvements
+
+Use bullets only.
+"""
+
+# =============================
 # SESSION STATE
 # =============================
 if "ai_feedback" not in st.session_state:
@@ -104,16 +157,23 @@ def overall_interview_score(comm, skill, personality):
     )
 
 # =============================
-# AI FEEDBACK
+# 🔹 ADDED: GEMINI FEEDBACK HELPERS
+# =============================
+@st.cache_data(show_spinner=False)
+def call_gemini(prompt):
+    if not LLM_ENABLED:
+        return "LLM disabled"
+    return gemini_model.generate_content(
+        prompt,
+        generation_config={"temperature": 0.2, "max_output_tokens": 300}
+    ).text
+
+# =============================
+# AI FEEDBACK (UNCHANGED FLOW)
 # =============================
 @st.cache_data(show_spinner=False)
 def generate_ai_feedback(summary: dict) -> str:
-    if not LLM_ENABLED:
-        return "LLM temporarily disabled – quota exhausted"
-    return gemini_model.generate_content(
-        "You are an experienced interview coach. Provide feedback.",
-        generation_config={"temperature": 0.2, "max_output_tokens": 250}
-    ).text
+    return call_gemini(GEMINI_CANDIDATE_PROMPT)
 
 # =============================
 # SYSTEM vs INTERVIEWER COMPARISON
@@ -136,15 +196,12 @@ INTERVIEWER:
 Recommendation: {interviewer_fit}
 Comments: {interviewer_comments}
 
-Compare alignment, disagreement, and suggest calibration.
+Compare alignment and gaps.
 """
-    return gemini_model.generate_content(
-        prompt,
-        generation_config={"temperature": 0.2, "max_output_tokens": 300}
-    ).text
+    return call_gemini(prompt)
 
 # =============================
-# EMAIL BUILDERS
+# EMAIL BUILDERS (UNCHANGED)
 # =============================
 def build_hr_email(final_score, comm, skill, personality, ai_feedback, interviewer_comments, interviewer_fit, comparison):
     return f"""
@@ -192,7 +249,7 @@ def send_email(subject, body, recipient):
         server.send_message(msg)
 
 # =============================
-# STREAMLIT UI
+# STREAMLIT UI (UNCHANGED)
 # =============================
 st.set_page_config(page_title="Interview Analyzer", layout="centered")
 st.title("🎯 Interview Performance Analyzer")
@@ -207,7 +264,6 @@ if uploaded_file:
     personality = personality_analysis(text)
     final_score = overall_interview_score(comm, skill, personality)
 
-    # ✅ RESTORED MANUAL SCORE BREAKDOWN UI
     st.subheader("📊 Scores")
     st.progress(final_score / 100)
     st.caption(f"Overall Score: {final_score}%")
@@ -218,7 +274,6 @@ if uploaded_file:
     for k, v in personality.items():
         st.write(f"**{k}**: {v}")
 
-    # ✅ RESTORED strong / weak SIGNALS
     strong = [k for k in IMPACT_WORDS + EXAMPLE_PHRASES + PROBLEM_WORDS if k in text][:5]
     weak = [k for k in FILLER_WORDS + PERSONALITY_SIGNALS["Uncertainty"] if k in text][:5]
 
@@ -231,10 +286,7 @@ if uploaded_file:
 
     st.subheader("🧑‍💼 Interviewer Evaluation")
     interviewer_comments = st.text_area("Comments")
-    interviewer_fit = st.selectbox(
-        "Recommendation",
-        ["Select", "Strong Yes", "Yes", "Borderline", "No"]
-    )
+    interviewer_fit = st.selectbox("Recommendation", ["Select", "Strong Yes", "Yes", "Borderline", "No"])
 
     if interviewer_fit != "Select":
         comparison = generate_comparison_report(
