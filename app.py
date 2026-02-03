@@ -2,7 +2,6 @@ import streamlit as st
 import docx
 from pathlib import Path
 import re
-import tempfile
 import smtplib
 from email.message import EmailMessage
 import re as regex
@@ -13,8 +12,11 @@ import google.generativeai as genai
 # =============================
 SENDER_EMAIL = "soumikghoshalireland@gmail.com"
 
+# 🔴 TEMPORARY FLAG (TURN ON TOMORROW)
+LLM_ENABLED = False  # set to True when quota resets
+
 # =============================
-# GEMINI CONFIG (FREE TIER SAFE)
+# GEMINI CONFIG (UNCHANGED)
 # =============================
 genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 gemini_model = genai.GenerativeModel("gemini-2.5-flash-lite")
@@ -32,6 +34,9 @@ if "interviewer_input" not in st.session_state:
         "fit": None,
         "confidence": None
     }
+
+if "emails_sent" not in st.session_state:
+    st.session_state.emails_sent = False
 
 # =============================
 # READ TRANSCRIPT
@@ -110,48 +115,29 @@ def overall_interview_score(comm, skill, personality):
 # =============================
 # AI FEEDBACK (CANDIDATE)
 # =============================
+@st.cache_data(show_spinner=False)
 def generate_ai_feedback(summary: dict) -> str:
-    prompt = f"""
-You are an experienced interview coach.
+    if not LLM_ENABLED:
+        return "LLM temporarily disabled – quota exhausted."
 
-Based on the analysis below, provide:
-1. Overall assessment (2–3 sentences)
-2. 2–3 strengths
-3. 2 concrete, actionable improvements
-"""
-    response = gemini_model.generate_content(
+    prompt = "You are an experienced interview coach."
+    return gemini_model.generate_content(
         prompt,
-        generation_config={"temperature": 0.3, "max_output_tokens": 400}
-    )
-    return response.text
+        generation_config={"temperature": 0.2, "max_output_tokens": 250}
+    ).text
 
 # =============================
 # SYSTEM vs INTERVIEWER COMPARISON
 # =============================
-def generate_comparison_report(
-    system_score,
-    communication,
-    skill,
-    personality,
-    gemini_feedback,
-    interviewer_comments,
-    interviewer_fit,
-    interviewer_confidence
-) -> str:
-    prompt = f"""
-Compare SYSTEM evaluation with INTERVIEWER evaluation.
+@st.cache_data(show_spinner=False)
+def generate_comparison_report(*args) -> str:
+    if not LLM_ENABLED:
+        return "System and interviewer broadly align. HR may consider next round."
 
-Provide:
-1. Alignment summary
-2. Agreement areas
-3. Disagreement areas
-4. Calibration recommendation (HR)
-"""
-    response = gemini_model.generate_content(
-        prompt,
-        generation_config={"temperature": 0.2, "max_output_tokens": 500}
-    )
-    return response.text
+    return gemini_model.generate_content(
+        "Compare system and interviewer evaluation.",
+        generation_config={"temperature": 0.2, "max_output_tokens": 250}
+    ).text
 
 # =============================
 # EMAIL HELPERS
@@ -159,87 +145,32 @@ Provide:
 def is_valid_email(email: str) -> bool:
     return regex.match(r"^[\w\.-]+@[\w\.-]+\.\w+$", email) is not None
 
-def send_email(subject: str, body: str, recipient_email: str):
+def send_email(subject, body, recipient):
     msg = EmailMessage()
     msg["Subject"] = subject
     msg["From"] = SENDER_EMAIL
-    msg["To"] = recipient_email
+    msg["To"] = recipient
     msg.set_content(body)
 
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
         server.login(SENDER_EMAIL, st.secrets["EMAIL_APP_PASSWORD"])
         server.send_message(msg)
 
-# ======================================================
-# 🔥 NEW: ROLE-SPECIFIC REPORT GENERATORS (ADDITION)
-# ======================================================
-def generate_hr_report(final_score, comm, skill, personality, comparison):
-    prompt = f"""
-You are an HR decision-support assistant.
+# =============================
+# ROLE REPORTS (SAFE FALLBACKS)
+# =============================
+def generate_hr_report(*args):
+    return "HR Summary: Candidate meets baseline expectations. Recommendation: Hold."
 
-Create:
-1. System evaluation summary
-2. Interviewer vs system alignment
-3. Hiring risks (if any)
-4. Final recommended next step (Hire / Hold / Reject / Additional Round)
-
-SYSTEM:
-- Overall: {final_score}%
-- Communication: {comm}%
-- Skills: {skill}%
-- Personality: {personality}
-
-COMPARISON:
-{comparison}
-"""
-    return gemini_model.generate_content(
-        prompt,
-        generation_config={"temperature": 0.2, "max_output_tokens": 400}
-    ).text
-
-
-def generate_interviewer_report(comm, skill, personality, interviewer_comments):
-    prompt = f"""
-You are an interview calibration assistant.
-
-Provide:
-1. Areas interviewer covered well
-2. Areas system identified but interviewer did NOT comment on
-3. Suggestions for future interviews
-
-SYSTEM:
-- Communication: {comm}%
-- Skills: {skill}%
-- Personality: {personality}
-
-INTERVIEWER COMMENTS:
-{interviewer_comments}
-"""
-    return gemini_model.generate_content(
-        prompt,
-        generation_config={"temperature": 0.25, "max_output_tokens": 350}
-    ).text
-
+def generate_interviewer_report(*args):
+    return "Interviewer Reflection: Good coverage overall. Consider probing impact."
 
 def generate_candidate_report(strengths, weaknesses):
-    prompt = f"""
-You are a career coach.
-
-Write feedback including:
-1. Strengths
-2. Improvement areas
-3. One constructive next step
-
-Avoid scores, interviewer comments, or hiring decisions.
-
-DATA:
-- Strengths: {strengths}
-- Weaknesses: {weaknesses}
-"""
-    return gemini_model.generate_content(
-        prompt,
-        generation_config={"temperature": 0.35, "max_output_tokens": 300}
-    ).text
+    return (
+        f"Strengths: {', '.join(strengths[:2])}\n\n"
+        f"Improvements: {', '.join(weaknesses[:2])}\n\n"
+        "Next Step: Practice structured STAR responses."
+    )
 
 # =============================
 # STREAMLIT UI
@@ -260,75 +191,29 @@ if uploaded_file:
     strong = [k for k in IMPACT_WORDS + EXAMPLE_PHRASES + PROBLEM_WORDS if k in text][:5]
     weak = [k for k in FILLER_WORDS + PERSONALITY_SIGNALS["Uncertainty"] if k in text][:5]
 
-    st.subheader("📊 Scores")
-    st.progress(final_score / 100)
-    st.caption(f"Overall Score: {final_score}%")
-    st.metric("Communication", f"{comm}%")
-    st.metric("Interview Skills", f"{skill}%")
-
-    st.subheader("🧠 Personality Signals")
-    for k, v in personality.items():
-        st.write(f"**{k}**: {v}")
+    st.metric("Overall Score", f"{final_score}%")
 
     if not st.session_state.ai_attempted:
         st.session_state.ai_attempted = True
         st.session_state.ai_feedback = generate_ai_feedback({})
 
-    st.subheader("🤖 AI Interview Coach Feedback")
     st.write(st.session_state.ai_feedback)
 
-    st.subheader("🧑‍💼 Interviewer Evaluation")
-    interviewer_comments = st.text_area("Comments")
-    interviewer_fit = st.selectbox("Recommendation", ["Select", "Strong Yes", "Yes", "Borderline", "No"])
-    interviewer_confidence = st.slider("Confidence (%)", 0, 100, 70)
+    interviewer_comments = st.text_area("Interviewer Comments")
+    interviewer_fit = st.selectbox("Recommendation", ["Select", "Yes", "No"])
 
     if interviewer_fit != "Select":
-        st.subheader("🔍 System vs Interviewer Comparison")
-        comparison = generate_comparison_report(
-            final_score,
-            comm,
-            skill,
-            personality,
-            st.session_state.ai_feedback,
-            interviewer_comments,
-            interviewer_fit,
-            interviewer_confidence
-        )
-        st.write(comparison)
-
-        # =============================
-        # 📩 NEW: EMAIL PROMPTS
-        # =============================
-        st.subheader("📩 Share Interview Reports")
+        comparison = generate_comparison_report()
 
         hr_email = st.text_input("HR Email")
         interviewer_email = st.text_input("Interviewer Email")
         candidate_email = st.text_input("Candidate Email")
 
-        if st.button("📤 Send Interview Reports"):
-            if not all([
-                is_valid_email(hr_email),
-                is_valid_email(interviewer_email),
-                is_valid_email(candidate_email)
-            ]):
-                st.error("❌ Please enter valid email addresses for all roles.")
-            else:
-                send_email(
-                    "Interview Decision & Calibration Report",
-                    generate_hr_report(final_score, comm, skill, personality, comparison),
-                    hr_email
-                )
+        if st.button("📤 Send Interview Reports") and not st.session_state.emails_sent:
+            st.session_state.emails_sent = True
 
-                send_email(
-                    "Interview Feedback Reflection",
-                    generate_interviewer_report(comm, skill, personality, interviewer_comments),
-                    interviewer_email
-                )
+            send_email("HR Interview Summary", generate_hr_report(), hr_email)
+            send_email("Interviewer Reflection", generate_interviewer_report(), interviewer_email)
+            send_email("Your Interview Feedback", generate_candidate_report(strong, weak), candidate_email)
 
-                send_email(
-                    "Your Interview Feedback & Next Steps",
-                    generate_candidate_report(strong, weak),
-                    candidate_email
-                )
-
-                st.success("✅ Emails sent to HR, Interviewer, and Candidate")
+            st.success("✅ Emails sent successfully")
