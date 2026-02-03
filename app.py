@@ -4,56 +4,17 @@ from pathlib import Path
 import re
 import smtplib
 from email.message import EmailMessage
-import google.generativeai as genai
-from google.api_core.exceptions import ResourceExhausted
+import tempfile
+import whisper
 
 # =============================
-# CONSTANTS / FEATURE FLAGS
+# CONSTANTS / FLAGS
 # =============================
 SENDER_EMAIL = "soumikghoshalireland@gmail.com"
 EMAIL_REGEX = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
 
-# 🔒 Gemini is DISABLED
+# ❌ Gemini / GenAI fully disabled
 LLM_ENABLED = False
-
-# =============================
-# GEMINI CONFIG (INACTIVE)
-# =============================
-if LLM_ENABLED:
-    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-    gemini_model = genai.GenerativeModel("gemini-2.5-flash-lite")
-
-# =============================
-# GEMINI PROMPTS (UNCHANGED)
-# =============================
-COMMON_GEMINI_CONSTRAINTS = """
-NON-NEGOTIABLE RULES:
-- Do NOT assign scores
-- Do NOT make hire decisions
-- Do NOT invent information
-- Use only provided data
-- Be concise and structured
-"""
-
-GEMINI_SYSTEM_SUMMARY_PROMPT = f"""
-You are interpreting interview evaluation results for internal review.
-
-{COMMON_GEMINI_CONSTRAINTS}
-
-Explain what the scores indicate about the candidate.
-Focus on clarity, strengths, and risks.
-"""
-
-GEMINI_INTERVIEWER_COACHING_PROMPT = f"""
-You are providing private coaching feedback to an interviewer.
-
-{COMMON_GEMINI_CONSTRAINTS}
-
-FORMAT:
-- What went well
-- What could be improved
-- Missed probing opportunities
-"""
 
 # =============================
 # SESSION STATE
@@ -68,14 +29,48 @@ for key in [
         st.session_state[key] = None
 
 # =============================
-# READ TRANSCRIPT
+# READ TEXT TRANSCRIPT
 # =============================
 def read_transcript(uploaded_file):
     suffix = Path(uploaded_file.name).suffix.lower()
+
     if suffix == ".docx":
         doc = docx.Document(uploaded_file)
         return "\n".join(p.text for p in doc.paragraphs).lower()
+
     return uploaded_file.read().decode("utf-8", errors="ignore").lower()
+
+# =============================
+# TRANSCRIBE AUDIO (NO GENAI)
+# =============================
+def transcribe_audio(uploaded_file):
+    """
+    Offline speech-to-text using open-source Whisper.
+    Free for POC. No cloud. No GenAI.
+    """
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+        tmp.write(uploaded_file.read())
+        audio_path = tmp.name
+
+    model = whisper.load_model("small")
+    result = model.transcribe(audio_path)
+
+    return result["text"].lower()
+
+# =============================
+# NORMALIZE INPUT → TEXT
+# =============================
+def extract_text(uploaded_file):
+    suffix = Path(uploaded_file.name).suffix.lower()
+
+    if suffix in [".txt", ".docx"]:
+        return read_transcript(uploaded_file)
+
+    if suffix in [".mp3", ".wav"]:
+        st.info("Audio interviews are transcribed automatically before analysis.")
+        return transcribe_audio(uploaded_file)
+
+    raise ValueError("Unsupported file format")
 
 # =============================
 # ANALYSIS LOGIC (UNCHANGED)
@@ -99,13 +94,7 @@ def overall_interview_score(comm, skill):
     return round(comm * 0.4 + skill * 0.6, 2)
 
 # =============================
-# GEMINI HELPER (DISABLED)
-# =============================
-def call_gemini(prompt):
-    return "AI interpretation disabled."
-
-# =============================
-# EMAIL HELPERS (SAFE)
+# EMAIL HELPERS
 # =============================
 def is_valid_email(email):
     return email and re.match(EMAIL_REGEX, email)
@@ -131,13 +120,16 @@ def send_email(subject, body, recipient):
 st.set_page_config(page_title="Interview Analyzer", layout="centered")
 st.title("🎯 Interview Performance Analyzer")
 
-uploaded_file = st.file_uploader("Upload Interview Transcript", ["txt", "docx"])
+uploaded_file = st.file_uploader(
+    "Upload Interview File (Transcript or Audio)",
+    ["txt", "docx", "mp3", "wav"]
+)
 
-# -----------------------------------------------------
-# 1️⃣ SYSTEM SCORING
-# -----------------------------------------------------
+# =============================
+# MAIN PIPELINE
+# =============================
 if uploaded_file:
-    text = read_transcript(uploaded_file)
+    text = extract_text(uploaded_file)
 
     comm = communication_score(text)
     skill = interview_skill_score(text)
@@ -148,18 +140,14 @@ if uploaded_file:
     st.metric("Communication", f"{comm}%")
     st.metric("Interview Skills", f"{skill}%")
 
-    # -------------------------------------------------
-    # 2️⃣ SYSTEM INTERPRETATION (STATIC)
-    # -------------------------------------------------
+    # Static system interpretation (GenAI disabled)
     if st.session_state.system_summary is None:
-        st.session_state.system_summary = call_gemini("")
+        st.session_state.system_summary = "System-generated scores based on deterministic rules."
 
     st.subheader("🧠 System Interpretation")
     st.write(st.session_state.system_summary)
 
-    # -------------------------------------------------
-    # 3️⃣ INTERVIEWER INPUT
-    # -------------------------------------------------
+    # Interviewer input
     st.subheader("🧑‍💼 Interviewer Feedback")
     interviewer_comments = st.text_area("Comments")
     interviewer_fit = st.selectbox(
@@ -167,36 +155,25 @@ if uploaded_file:
         ["Select", "Strong Yes", "Yes", "Borderline", "No"]
     )
 
-    # -------------------------------------------------
-    # 4️⃣ SYSTEM vs INTERVIEWER COMPARISON
-    # -------------------------------------------------
     if interviewer_fit != "Select" and interviewer_comments:
         if st.session_state.comparison is None:
-            st.session_state.comparison = call_gemini("")
+            st.session_state.comparison = "Comparison based on system scores and interviewer judgment."
 
         st.subheader("🔍 System vs Interviewer Comparison")
         st.write(st.session_state.comparison)
 
-        # -------------------------------------------------
-        # 5️⃣ INTERVIEWER COACHING (DISABLED)
-        # -------------------------------------------------
         if st.session_state.interviewer_feedback is None:
-            st.session_state.interviewer_feedback = call_gemini("")
+            st.session_state.interviewer_feedback = "Interviewer coaching feedback unavailable (AI disabled)."
 
         st.subheader("🧑‍🏫 Interviewer Coaching (Preview)")
         st.write(st.session_state.interviewer_feedback)
 
-        # -------------------------------------------------
-        # 6️⃣ EMAIL INPUTS
-        # -------------------------------------------------
+        # Email inputs
         st.subheader("📧 Send Reports")
         hr_email = st.text_input("HR Email")
         candidate_email = st.text_input("Candidate Email")
         interviewer_email = st.text_input("Interviewer Email")
 
-        # -------------------------------------------------
-        # 7️⃣ SEND EMAILS
-        # -------------------------------------------------
         if st.button("📤 Send Emails") and not st.session_state.emails_sent:
             if not any([hr_email, candidate_email, interviewer_email]):
                 st.error("❌ Please enter at least one valid email address")
@@ -206,7 +183,7 @@ if uploaded_file:
 
             send_email(
                 "HR Interview Summary",
-                st.session_state.system_summary + "\n\n" + str(st.session_state.comparison),
+                st.session_state.system_summary + "\n\n" + st.session_state.comparison,
                 hr_email
             )
 
@@ -218,7 +195,7 @@ if uploaded_file:
 
             send_email(
                 "Interview Coaching Feedback (Private)",
-                str(st.session_state.interviewer_feedback),
+                st.session_state.interviewer_feedback,
                 interviewer_email
             )
 
