@@ -5,10 +5,9 @@ import re
 import smtplib
 from email.message import EmailMessage
 import tempfile
+import subprocess
 
-# Audio / Video
 import whisper
-import ffmpeg
 import imageio_ffmpeg
 
 # =============================
@@ -71,15 +70,22 @@ def extract_audio_from_video(uploaded_file):
     # Output audio path
     audio_path = tempfile.NamedTemporaryFile(delete=False, suffix=".wav").name
 
-    # Use bundled ffmpeg binary (Streamlit Cloud safe)
+    # Get bundled ffmpeg binary
     ffmpeg_binary = imageio_ffmpeg.get_ffmpeg_exe()
 
-    (
-        ffmpeg
-        .input(video_path)
-        .output(audio_path, ac=1, ar="16000")
-        .overwrite_output()
-        .run(cmd=ffmpeg_binary, quiet=True)
+    # Run ffmpeg directly (Streamlit Cloud safe)
+    subprocess.run(
+        [
+            ffmpeg_binary,
+            "-y",                 # overwrite
+            "-i", video_path,     # input video
+            "-ac", "1",           # mono
+            "-ar", "16000",       # 16kHz
+            audio_path
+        ],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
     )
 
     return audio_path
