@@ -6,14 +6,15 @@ import smtplib
 from email.message import EmailMessage
 import tempfile
 import whisper
+import ffmpeg
 
 # =============================
-# CONSTANTS / FLAGS
+# CONSTANTS
 # =============================
 SENDER_EMAIL = "soumikghoshalireland@gmail.com"
 EMAIL_REGEX = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
 
-# ❌ Gemini / GenAI fully disabled
+# Gemini / GenAI disabled
 LLM_ENABLED = False
 
 # =============================
@@ -29,6 +30,13 @@ for key in [
         st.session_state[key] = None
 
 # =============================
+# LOAD WHISPER MODEL (CACHED)
+# =============================
+@st.cache_resource
+def load_whisper_model():
+    return whisper.load_model("base")
+
+# =============================
 # READ TEXT TRANSCRIPT
 # =============================
 def read_transcript(uploaded_file):
@@ -41,21 +49,32 @@ def read_transcript(uploaded_file):
     return uploaded_file.read().decode("utf-8", errors="ignore").lower()
 
 # =============================
-# TRANSCRIBE AUDIO (NO GENAI)
+# TRANSCRIBE AUDIO
 # =============================
-def transcribe_audio(uploaded_file):
-    """
-    Offline speech-to-text using open-source Whisper.
-    Free for POC. No cloud. No GenAI.
-    """
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
-        tmp.write(uploaded_file.read())
-        audio_path = tmp.name
-
-    model = whisper.load_model("small")
+def transcribe_audio(audio_path):
+    model = load_whisper_model()
     result = model.transcribe(audio_path)
-
     return result["text"].lower()
+
+# =============================
+# EXTRACT AUDIO FROM VIDEO
+# =============================
+def extract_audio_from_video(uploaded_file):
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as video_tmp:
+        video_tmp.write(uploaded_file.read())
+        video_path = video_tmp.name
+
+    audio_path = tempfile.NamedTemporaryFile(delete=False, suffix=".wav").name
+
+    (
+        ffmpeg
+        .input(video_path)
+        .output(audio_path, ac=1, ar="16000")
+        .overwrite_output()
+        .run(quiet=True)
+    )
+
+    return audio_path
 
 # =============================
 # NORMALIZE INPUT → TEXT
@@ -68,7 +87,14 @@ def extract_text(uploaded_file):
 
     if suffix in [".mp3", ".wav"]:
         st.info("Audio interviews are transcribed automatically before analysis.")
-        return transcribe_audio(uploaded_file)
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp.write(uploaded_file.read())
+            return transcribe_audio(tmp.name)
+
+    if suffix in [".mp4", ".mov"]:
+        st.info("Video interviews are converted to audio and transcribed automatically.")
+        audio_path = extract_audio_from_video(uploaded_file)
+        return transcribe_audio(audio_path)
 
     raise ValueError("Unsupported file format")
 
@@ -121,8 +147,8 @@ st.set_page_config(page_title="Interview Analyzer", layout="centered")
 st.title("🎯 Interview Performance Analyzer")
 
 uploaded_file = st.file_uploader(
-    "Upload Interview File (Transcript or Audio)",
-    ["txt", "docx", "mp3", "wav"]
+    "Upload Interview File (Transcript, Audio, or Video)",
+    ["txt", "docx", "mp3", "wav", "mp4", "mov"]
 )
 
 # =============================
@@ -140,14 +166,12 @@ if uploaded_file:
     st.metric("Communication", f"{comm}%")
     st.metric("Interview Skills", f"{skill}%")
 
-    # Static system interpretation (GenAI disabled)
     if st.session_state.system_summary is None:
         st.session_state.system_summary = "System-generated scores based on deterministic rules."
 
     st.subheader("🧠 System Interpretation")
     st.write(st.session_state.system_summary)
 
-    # Interviewer input
     st.subheader("🧑‍💼 Interviewer Feedback")
     interviewer_comments = st.text_area("Comments")
     interviewer_fit = st.selectbox(
@@ -168,7 +192,6 @@ if uploaded_file:
         st.subheader("🧑‍🏫 Interviewer Coaching (Preview)")
         st.write(st.session_state.interviewer_feedback)
 
-        # Email inputs
         st.subheader("📧 Send Reports")
         hr_email = st.text_input("HR Email")
         candidate_email = st.text_input("Candidate Email")
