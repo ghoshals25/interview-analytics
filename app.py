@@ -6,7 +6,6 @@ import tempfile
 import smtplib
 from email.message import EmailMessage
 import re as regex
-
 import google.generativeai as genai
 
 # =============================
@@ -27,9 +26,6 @@ if "ai_feedback" not in st.session_state:
     st.session_state.ai_feedback = None
     st.session_state.ai_attempted = False
 
-# =============================
-# 🆕 INTERVIEWER SESSION STATE (STEP 1)
-# =============================
 if "interviewer_input" not in st.session_state:
     st.session_state.interviewer_input = {
         "comments": "",
@@ -42,14 +38,11 @@ if "interviewer_input" not in st.session_state:
 # =============================
 def read_transcript(uploaded_file) -> str:
     suffix = Path(uploaded_file.name).suffix.lower()
-
     if suffix == ".docx":
         doc = docx.Document(uploaded_file)
         return "\n".join(p.text for p in doc.paragraphs).lower()
-
     elif suffix == ".txt":
         return uploaded_file.read().decode("utf-8", errors="ignore").lower()
-
     else:
         raise ValueError("Unsupported file format")
 
@@ -61,13 +54,10 @@ FILLER_WORDS = ["um", "uh", "like", "you know", "basically", "sort of", "kind of
 def communication_score(text: str) -> float:
     words = text.split()
     sentences = [s for s in re.split(r"[.!?]", text) if s.strip()]
-
     filler_count = sum(text.count(f) for f in FILLER_WORDS)
     avg_sentence_length = len(words) / max(len(sentences), 1)
-
     filler_penalty = min(filler_count / 12, 1)
     ramble_penalty = 0.3 if avg_sentence_length > 25 else 0
-
     score = 1 - (filler_penalty + ramble_penalty)
     return round(max(min(score, 1), 0) * 100, 2)
 
@@ -110,7 +100,6 @@ def overall_interview_score(comm, skill, personality):
         1 if v == "High" else 0.5 if v == "Medium" else 0
         for v in personality.values()
     ) / len(personality)
-
     return round(
         skill * 0.40 +
         comm * 0.35 +
@@ -119,7 +108,7 @@ def overall_interview_score(comm, skill, personality):
     )
 
 # =============================
-# AI FEEDBACK
+# AI FEEDBACK (CANDIDATE)
 # =============================
 def generate_ai_feedback(summary: dict) -> str:
     prompt = f"""
@@ -144,7 +133,51 @@ Interview Analysis:
     return response.text
 
 # =============================
-# EMAIL HELPERS (UNCHANGED)
+# SYSTEM vs INTERVIEWER COMPARISON (NEW)
+# =============================
+def generate_comparison_report(
+    system_score,
+    communication,
+    skill,
+    personality,
+    gemini_feedback,
+    interviewer_comments,
+    interviewer_fit,
+    interviewer_confidence
+) -> str:
+    prompt = f"""
+You are a hiring calibration reviewer.
+
+Compare the SYSTEM evaluation with the INTERVIEWER evaluation.
+
+SYSTEM:
+- Overall Score: {system_score}%
+- Communication: {communication}%
+- Interview Skills: {skill}%
+- Personality: {personality}
+
+AI Interpretation:
+{gemini_feedback}
+
+INTERVIEWER:
+- Recommendation: {interviewer_fit}
+- Confidence: {interviewer_confidence}%
+- Comments: {interviewer_comments}
+
+Provide:
+1. Alignment Summary
+2. Agreement Areas
+3. Disagreement Areas
+4. Calibration Recommendation (HR)
+"""
+    response = gemini_model.generate_content(
+        prompt,
+        generation_config={"temperature": 0.2, "max_output_tokens": 500}
+    )
+    return response.text
+
+# =============================
+# EMAIL HELPERS
 # =============================
 def is_valid_email(email: str) -> bool:
     return regex.match(r"^[\w\.-]+@[\w\.-]+\.\w+$", email) is not None
@@ -154,12 +187,9 @@ def send_email_to_user(file_path: str, user_email: str):
     msg["Subject"] = "Your Interview Feedback Report"
     msg["From"] = SENDER_EMAIL
     msg["To"] = user_email
-
     msg.set_content("Hi,\n\nAttached is your interview feedback report.\n\nBest,\nSoumik")
-
     with open(file_path, "rb") as f:
         msg.add_attachment(f.read(), maintype="text", subtype="plain", filename="Interview_Feedback.txt")
-
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
         server.login(SENDER_EMAIL, st.secrets["EMAIL_APP_PASSWORD"])
         server.send_message(msg)
@@ -193,8 +223,6 @@ if uploaded_file:
     for k, v in personality.items():
         st.write(f"**{k}**: {v}")
 
-    st.subheader("🤖 AI Interview Coach Feedback")
-
     if not st.session_state.ai_attempted:
         st.session_state.ai_attempted = True
         st.session_state.ai_feedback = generate_ai_feedback({
@@ -205,53 +233,34 @@ if uploaded_file:
             "weak_signals": weak
         })
 
-    if st.session_state.ai_feedback:
-        st.write(st.session_state.ai_feedback)
+    st.subheader("🤖 AI Interview Coach Feedback")
+    st.write(st.session_state.ai_feedback)
 
-        # =============================
-        # 🆕 INTERVIEWER EVALUATION (STEP 1)
-        # =============================
-        st.subheader("🧑‍💼 Interviewer Evaluation")
+    st.subheader("🧑‍💼 Interviewer Evaluation")
+    interviewer_comments = st.text_area("Comments", value=st.session_state.interviewer_input["comments"])
+    interviewer_fit = st.selectbox(
+        "Recommendation",
+        ["Select", "Strong Yes", "Yes", "Borderline", "No"]
+    )
+    interviewer_confidence = st.slider("Confidence (%)", 0, 100, 70)
 
-        interviewer_comments = st.text_area(
-            "Interviewer comments (strengths, concerns, examples)",
-            height=160,
-            value=st.session_state.interviewer_input["comments"]
+    if interviewer_fit != "Select":
+        st.session_state.interviewer_input = {
+            "comments": interviewer_comments,
+            "fit": interviewer_fit,
+            "confidence": interviewer_confidence
+        }
+        st.success("✅ Interviewer input saved")
+
+        st.subheader("🔍 System vs Interviewer Comparison")
+        comparison = generate_comparison_report(
+            final_score,
+            comm,
+            skill,
+            personality,
+            st.session_state.ai_feedback,
+            interviewer_comments,
+            interviewer_fit,
+            interviewer_confidence
         )
-
-        interviewer_fit = st.selectbox(
-            "Overall interviewer recommendation",
-            ["Select", "Strong Yes", "Yes", "Borderline", "No"],
-            index=0 if st.session_state.interviewer_input["fit"] is None else
-            ["Select", "Strong Yes", "Yes", "Borderline", "No"].index(
-                st.session_state.interviewer_input["fit"]
-            )
-        )
-
-        interviewer_confidence = st.slider(
-            "Confidence in this recommendation (%)",
-            0, 100,
-            st.session_state.interviewer_input["confidence"] or 70
-        )
-
-        if interviewer_fit != "Select":
-            st.session_state.interviewer_input = {
-                "comments": interviewer_comments,
-                "fit": interviewer_fit,
-                "confidence": interviewer_confidence
-            }
-            st.success("✅ Interviewer input saved")
-
-        st.subheader("📧 Email this report to me")
-        user_email = st.text_input("Enter your email address")
-
-        if st.button("Send Email"):
-            if not is_valid_email(user_email):
-                st.error("Please enter a valid email address.")
-            else:
-                report_path = tempfile.NamedTemporaryFile(delete=False, suffix=".txt").name
-                with open(report_path, "w") as f:
-                    f.write(f"Overall Score: {final_score}%\n\n")
-                    f.write(st.session_state.ai_feedback)
-                send_email_to_user(report_path, user_email)
-                st.success(f"Report sent to {user_email} 📬")
+        st.write(comparison)
