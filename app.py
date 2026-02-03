@@ -5,20 +5,19 @@ import re
 import smtplib
 from email.message import EmailMessage
 import tempfile
+
+# Audio / Video
 import whisper
 import ffmpeg
 import imageio_ffmpeg
-import os
 
-# Force ffmpeg-python to use bundled ffmpeg binary
-os.environ["FFMPEG_BINARY"] = imageio_ffmpeg.get_ffmpeg_exe()
 # =============================
 # CONSTANTS
 # =============================
 SENDER_EMAIL = "soumikghoshalireland@gmail.com"
 EMAIL_REGEX = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
 
-# Gemini / GenAI disabled
+# Gemini / GenAI fully disabled
 LLM_ENABLED = False
 
 # =============================
@@ -61,21 +60,26 @@ def transcribe_audio(audio_path):
     return result["text"].lower()
 
 # =============================
-# EXTRACT AUDIO FROM VIDEO
+# EXTRACT AUDIO FROM VIDEO (FIXED)
 # =============================
 def extract_audio_from_video(uploaded_file):
+    # Save uploaded video
     with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as video_tmp:
         video_tmp.write(uploaded_file.read())
         video_path = video_tmp.name
 
+    # Output audio path
     audio_path = tempfile.NamedTemporaryFile(delete=False, suffix=".wav").name
+
+    # Use bundled ffmpeg binary (Streamlit Cloud safe)
+    ffmpeg_binary = imageio_ffmpeg.get_ffmpeg_exe()
 
     (
         ffmpeg
         .input(video_path)
         .output(audio_path, ac=1, ar="16000")
         .overwrite_output()
-        .run(quiet=True)
+        .run(cmd=ffmpeg_binary, quiet=True)
     )
 
     return audio_path
