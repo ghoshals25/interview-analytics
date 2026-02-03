@@ -123,7 +123,7 @@ def generate_ai_feedback(summary: dict) -> str:
     ).text
 
 # ======================================================
-# ✅ ADDITION: SYSTEM vs INTERVIEWER COMPARISON (NEW)
+# ADDITION: SYSTEM vs INTERVIEWER COMPARISON (EXISTING)
 # ======================================================
 @st.cache_data(show_spinner=False)
 def generate_comparison_report(
@@ -174,6 +174,59 @@ Provide:
         generation_config={"temperature": 0.2, "max_output_tokens": 300}
     ).text
 
+# ======================================================
+# ADDITION: ROLE-SPECIFIC EMAIL BUILDERS (NEW)
+# ======================================================
+def build_hr_email(
+    final_score,
+    comm,
+    skill,
+    personality,
+    ai_feedback,
+    interviewer_comments,
+    interviewer_fit,
+    comparison
+) -> str:
+    return f"""
+HR INTERVIEW SUMMARY
+
+--- SYSTEM EVALUATION ---
+Overall Score: {final_score}%
+Communication: {comm}%
+Interview Skills: {skill}%
+Personality Signals: {personality}
+
+AI Feedback:
+{ai_feedback}
+
+--- INTERVIEWER INPUT ---
+Recommendation: {interviewer_fit}
+Comments:
+{interviewer_comments}
+
+--- SYSTEM vs INTERVIEWER COMPARISON ---
+{comparison}
+"""
+
+
+def build_candidate_email(strengths, weaknesses) -> str:
+    strengths_text = "\n".join(f"- {s}" for s in strengths[:3]) or "- No strong signals detected"
+    weaknesses_text = "\n".join(f"- {w}" for w in weaknesses[:3]) or "- No major gaps detected"
+
+    return f"""
+INTERVIEW FEEDBACK SUMMARY
+
+Strengths:
+{strengths_text}
+
+Areas for Improvement:
+{weaknesses_text}
+
+Tentative Next Steps:
+- Continue practising structured answers (STAR method)
+- Focus on clearly articulating impact and outcomes
+"""
+
 # =============================
 # EMAIL HELPERS
 # =============================
@@ -207,7 +260,6 @@ if uploaded_file:
     personality = personality_analysis(text)
     final_score = overall_interview_score(comm, skill, personality)
 
-    # ⚠️ BASE UI UNCHANGED
     st.metric("Overall Score", f"{final_score}%")
 
     if not st.session_state.ai_attempted:
@@ -225,8 +277,6 @@ if uploaded_file:
     )
 
     if interviewer_fit != "Select":
-
-        # ✅ ADDITION: COMPARISON DISPLAY (NO BASE CHANGE)
         comparison = generate_comparison_report(
             final_score,
             comm,
@@ -247,8 +297,34 @@ if uploaded_file:
         if st.button("📤 Send Interview Reports") and not st.session_state.emails_sent:
             st.session_state.emails_sent = True
 
-            send_email("HR Interview Summary", "HR summary placeholder", hr_email)
-            send_email("Interviewer Reflection", "Interviewer feedback placeholder", interviewer_email)
-            send_email("Candidate Feedback", "Candidate feedback placeholder", candidate_email)
+            # ✅ HR EMAIL (NEW CONTENT)
+            send_email(
+                "HR Interview Summary",
+                build_hr_email(
+                    final_score,
+                    comm,
+                    skill,
+                    personality,
+                    st.session_state.ai_feedback,
+                    interviewer_comments,
+                    interviewer_fit,
+                    comparison
+                ),
+                hr_email
+            )
+
+            # ❌ INTERVIEWER EMAIL UNCHANGED
+            send_email(
+                "Interviewer Reflection",
+                "Interviewer feedback placeholder",
+                interviewer_email
+            )
+
+            # ✅ CANDIDATE EMAIL (NEW CONTENT)
+            send_email(
+                "Your Interview Feedback & Next Steps",
+                build_candidate_email(strong, weak),
+                candidate_email
+            )
 
             st.success("✅ Emails sent successfully")
