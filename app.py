@@ -11,6 +11,7 @@ import google.generativeai as genai
 # =============================
 SENDER_EMAIL = "soumikghoshalireland@gmail.com"
 LLM_ENABLED = True
+EMAIL_REGEX = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
 
 # =============================
 # GEMINI CONFIG
@@ -84,8 +85,10 @@ def communication_score(text):
 
 def interview_skill_score(text):
     score = 0
-    if any(p in text for p in EXAMPLE_PHRASES): score += 40
-    if any(p in text for p in IMPACT_WORDS): score += 60
+    if any(p in text for p in EXAMPLE_PHRASES):
+        score += 40
+    if any(p in text for p in IMPACT_WORDS):
+        score += 60
     return min(score, 100)
 
 def overall_interview_score(comm, skill):
@@ -101,6 +104,27 @@ def call_gemini(prompt):
         prompt,
         generation_config={"temperature": 0.2, "max_output_tokens": 300}
     ).text
+
+# =============================
+# EMAIL HELPERS (FIXED)
+# =============================
+def is_valid_email(email):
+    return email and re.match(EMAIL_REGEX, email)
+
+def send_email(subject, body, recipient):
+    if not is_valid_email(recipient):
+        st.warning(f"⚠️ Skipping invalid email: {recipient}")
+        return
+
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = SENDER_EMAIL
+    msg["To"] = recipient
+    msg.set_content(body)
+
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+        server.login(SENDER_EMAIL, st.secrets["EMAIL_APP_PASSWORD"])
+        server.send_message(msg)
 
 # =============================
 # STREAMLIT UI
@@ -203,17 +227,11 @@ INTERVIEWER COMMENTS:
         # 7️⃣ SEND EMAILS
         # -------------------------------------------------
         if st.button("📤 Send Emails") and not st.session_state.emails_sent:
-            st.session_state.emails_sent = True
+            if not any([hr_email, candidate_email, interviewer_email]):
+                st.error("❌ Please enter at least one valid email address")
+                st.stop()
 
-            def send_email(subject, body, recipient):
-                msg = EmailMessage()
-                msg["Subject"] = subject
-                msg["From"] = SENDER_EMAIL
-                msg["To"] = recipient
-                msg.set_content(body)
-                with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-                    server.login(SENDER_EMAIL, st.secrets["EMAIL_APP_PASSWORD"])
-                    server.send_message(msg)
+            st.session_state.emails_sent = True
 
             send_email(
                 "HR Interview Summary",
