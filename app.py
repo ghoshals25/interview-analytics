@@ -5,9 +5,6 @@
 import streamlit as st
 import docx
 import re
-from pathlib import Path
-from collections import Counter
-
 import google.generativeai as genai
 
 # =============================
@@ -59,9 +56,8 @@ Top 5 Interview Questions:
 # =============================
 # SESSION STATE
 # =============================
-for key in ["jd_cv_analysis"]:
-    if key not in st.session_state:
-        st.session_state[key] = None
+if "jd_cv_analysis" not in st.session_state:
+    st.session_state.jd_cv_analysis = None
 
 # =============================
 # FILE HELPERS
@@ -71,13 +67,13 @@ def read_docx(file):
     return "\n".join(p.text for p in doc.paragraphs).lower()
 
 # =============================
-# ATS ENGINE (LIKE MATCHING)
+# ATS KEYWORDS
 # =============================
 SKILL_BUCKETS = {
     "skills": [
         "analytics", "data analysis", "insights", "business insights",
         "strategy", "strategic", "stakeholder", "stakeholder management",
-        "problem solving", "decision making", "commercial insights"
+        "problem solving", "decision making", "scenario analysis"
     ],
     "ownership": [
         "led", "leadership", "owned", "ownership", "managed", "management",
@@ -88,53 +84,50 @@ SKILL_BUCKETS = {
         "python", "sql", "power bi", "tableau", "excel",
         "pandas", "numpy", "spark",
         "dashboard", "data visualization", "etl",
-        "bigquery", "snowflake"
+        "bigquery", "snowflake", "vba", "dax"
     ]
 }
 
+# =============================
+# NORMALISATION
+# =============================
 def normalize(text):
     return re.sub(r"[^a-z0-9 ]", " ", text.lower())
 
 def like_match(text, keyword):
     return keyword in text
 
+# =============================
+# UPDATED SCORING LOGIC
+# =============================
 def compute_cv_match(jd_text, cv_text):
-    scores = {}
-    pct_list = []
-    details = {}
-
     jd_text = normalize(jd_text)
     cv_text = normalize(cv_text)
 
+    bucket_scores = {}
+    details = {}
+
     for bucket, keywords in SKILL_BUCKETS.items():
-        jd_hits = {k for k in keywords if like_match(jd_text, k)}
-        cv_hits = {k for k in keywords if like_match(cv_text, k)}
+        jd_items = {k for k in keywords if like_match(jd_text, k)}
+        cv_items = {k for k in keywords if like_match(cv_text, k)}
 
-        matched = jd_hits.intersection(cv_hits)
-        missing = jd_hits.difference(cv_hits)
+        intersection = jd_items.intersection(cv_items)
+        union = jd_items.union(cv_items)
+        missing = jd_items - cv_items
 
-        pct = round((len(matched) / len(keywords)) * 100, 1)
-        scores[bucket] = pct
-        pct_list.append(pct)
+        score = round((len(intersection) / len(union)) * 100, 1) if union else 0.0
 
+        bucket_scores[bucket] = score
         details[bucket] = {
-            "matched": matched,
+            "intersection": intersection,
+            "union": union,
             "missing": missing
         }
 
-    overall = round(sum(pct_list) / len(pct_list), 1)
-    return overall, scores, details
+    overall_score = round(sum(bucket_scores.values()) / 3, 1)
+    overall_score = min(overall_score, 100)
 
-def cv_summary(score, breakdown):
-    strengths = [k for k, v in breakdown.items() if v >= 70]
-    gaps = [k for k, v in breakdown.items() if v < 40]
-
-    summary = f"CV shows a {score}% alignment with the role."
-    if strengths:
-        summary += f" Strong signals in {', '.join(strengths)}."
-    if gaps:
-        summary += f" Limited surface evidence in {', '.join(gaps)}."
-    return summary
+    return overall_score, bucket_scores, details
 
 # =============================
 # UI
@@ -173,45 +166,46 @@ CANDIDATE CV:
         st.caption("Upload CV and Job Description to view analysis")
 
 # =============================
-# ATS SCORE + CONCISE EXPLANATION
+# ATS SCORE + INTERVIEWER EXPLANATION
 # =============================
 if uploaded_cv and job_description:
     cv_text = read_docx(uploaded_cv)
 
-    score, breakdown, details = compute_cv_match(job_description, cv_text)
-    summary = cv_summary(score, breakdown)
+    score, bucket_scores, details = compute_cv_match(job_description, cv_text)
 
     st.success(f"CV Match Score: {score}%")
-    st.caption(summary)
 
-    # ---- Concise interviewer-facing explanation ----
+    # ---- Interviewer-friendly explanation ----
     st.subheader("🔍 Why this score?")
 
-    jd_expectations = set()
-    cv_missing = set()
+    jd_focus = set()
+    cv_matches = set()
+    cv_gaps = set()
 
     for info in details.values():
-        jd_expectations.update(info["matched"])
-        cv_missing.update(info["missing"])
+        jd_focus.update(info["union"])
+        cv_matches.update(info["intersection"])
+        cv_gaps.update(info["missing"])
 
-    explanation = []
+    explanation_lines = []
 
-    if jd_expectations:
-        explanation.append(
-            f"The role emphasises {', '.join(sorted(jd_expectations))}."
+    if jd_focus:
+        explanation_lines.append(
+            f"The job description emphasises {', '.join(sorted(jd_focus))}."
         )
 
-    if cv_missing:
-        explanation.append(
-            f"The CV does not clearly demonstrate {', '.join(sorted(cv_missing))}, which are explicitly mentioned in the job description."
-        )
-    else:
-        explanation.append(
-            "The CV broadly covers the key areas highlighted in the job description."
+    if cv_matches:
+        explanation_lines.append(
+            f"The CV shows clear alignment in {', '.join(sorted(cv_matches))}."
         )
 
-    explanation.append(
-        "These areas should be probed further during the interview to assess depth and hands-on experience."
+    if cv_gaps:
+        explanation_lines.append(
+            f"However, the CV does not clearly surface evidence of {', '.join(sorted(cv_gaps))}, which are explicitly referenced in the job description."
+        )
+
+    explanation_lines.append(
+        "These areas should be explored further during the interview to validate depth, ownership, and hands-on experience."
     )
 
-    st.caption(" ".join(explanation)[:700])
+    st.caption(" ".join(explanation_lines)[:700])
