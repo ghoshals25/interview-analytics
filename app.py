@@ -1,6 +1,6 @@
 # =============================
 # INTERVIEW ANALYZER – FULL MERGED VERSION
-# (Canonical + ATS LIKE-matching update ONLY)
+# (Canonical + ATS LIKE-matching + Explanation)
 # =============================
 
 import streamlit as st
@@ -90,13 +90,6 @@ for key in [
         st.session_state[key] = None
 
 # =============================
-# LOAD WHISPER
-# =============================
-@st.cache_resource
-def load_whisper():
-    return WhisperModel("base", device="cpu", compute_type="int8")
-
-# =============================
 # FILE HELPERS
 # =============================
 def read_docx(file):
@@ -104,7 +97,7 @@ def read_docx(file):
     return "\n".join(p.text for p in doc.paragraphs).lower()
 
 # =============================
-# 🔒 ATS ENGINE (ONLY SECTION MODIFIED)
+# ATS ENGINE (UNCHANGED SCORING)
 # =============================
 
 SKILL_BUCKETS = {
@@ -135,6 +128,7 @@ def like_match(text, keyword):
 def compute_cv_match(jd_text, cv_text):
     scores = {}
     pct_list = []
+    details = {}
 
     jd_text = normalize(jd_text)
     cv_text = normalize(cv_text)
@@ -142,13 +136,22 @@ def compute_cv_match(jd_text, cv_text):
     for bucket, keywords in SKILL_BUCKETS.items():
         jd_hits = {k for k in keywords if like_match(jd_text, k)}
         cv_hits = {k for k in keywords if like_match(cv_text, k)}
+
         matched = jd_hits.intersection(cv_hits)
+        missing = jd_hits.difference(cv_hits)
 
         pct = round((len(matched) / len(keywords)) * 100, 1)
+
         scores[bucket] = pct
         pct_list.append(pct)
 
-    return round(sum(pct_list) / len(pct_list), 1), scores
+        details[bucket] = {
+            "matched": sorted(matched),
+            "missing": sorted(missing)
+        }
+
+    overall = round(sum(pct_list) / len(pct_list), 1)
+    return overall, scores, details
 
 def cv_summary(score, breakdown):
     strengths = [k for k, v in breakdown.items() if v >= 70]
@@ -199,14 +202,28 @@ CANDIDATE CV:
         st.caption("Upload CV and Job Description to view analysis")
 
 # =============================
-# ATS SCORE DISPLAY (UNCHANGED)
+# ATS SCORE + EXPLANATION
 # =============================
 if uploaded_cv and job_description:
     cv_text = read_docx(uploaded_cv)
-    score, breakdown = compute_cv_match(job_description, cv_text)
+    score, breakdown, details = compute_cv_match(job_description, cv_text)
     summary = cv_summary(score, breakdown)
 
     st.success(f"CV Match Score: {score}%")
     st.caption(summary)
 
-st.info("Interview upload, scoring, Gemini interpretation, audio dictation, and email flows continue unchanged below.")
+    st.subheader("🔍 Why this score?")
+    for bucket, info in details.items():
+        st.markdown(f"**{bucket.capitalize()}**")
+
+        if info["matched"]:
+            st.markdown(f"- ✅ Matched: {', '.join(info['matched'])}")
+        else:
+            st.markdown("- ⚠️ No clear matches found")
+
+        if info["missing"]:
+            st.markdown(f"- ❌ Missing from CV (present in JD): {', '.join(info['missing'])}")
+        else:
+            st.markdown("- ✅ No major gaps detected")
+
+st.info("Interview analysis, Gemini interpretation, audio dictation, and email flows continue unchanged below.")
