@@ -1,6 +1,6 @@
 # =============================
 # INTERVIEW ANALYZER – FULL MERGED VERSION
-# (Existing features preserved + CV/JD/ATS added)
+# (Existing features preserved + CV/JD/ATS + Interviewer Audio)
 # =============================
 
 import streamlit as st
@@ -138,6 +138,18 @@ def extract_text(uploaded_file):
     raise ValueError("Unsupported file type")
 
 # =============================
+# INTERVIEWER AUDIO DICTATION (ADD-ON)
+# =============================
+def transcribe_interviewer_audio(audio_bytes):
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as t:
+        t.write(audio_bytes)
+        audio_path = t.name
+
+    model = load_whisper()
+    segments, _ = model.transcribe(audio_path)
+    return " ".join(s.text for s in segments).lower()
+
+# =============================
 # SCORING (DETERMINISTIC)
 # =============================
 FILLER_WORDS = ["um", "uh", "like", "you know"]
@@ -159,7 +171,7 @@ def overall_interview_score(comm, skill):
     return round(comm * 0.4 + skill * 0.6, 2)
 
 # =============================
-# CV / JD ATS ENGINE (NEW)
+# CV / JD ATS ENGINE
 # =============================
 SKILL_BUCKETS = {
     "skills": ["analytics", "insights", "strategy", "stakeholder"],
@@ -223,7 +235,7 @@ def send_email(subject, body, recipient):
 st.set_page_config(page_title="Interview Analyzer", layout="centered")
 st.title("🎯 Interview Performance Analyzer")
 
-# ---- NEW: PRE-INTERVIEW CONTEXT ----
+# ---- PRE-INTERVIEW CONTEXT ----
 st.subheader("🧩 Pre-Interview Context")
 role = st.selectbox("Role", ["Analytics and Insights Lead"])
 job_description = st.text_area("Job Description")
@@ -238,7 +250,7 @@ if uploaded_cv and job_description:
     st.success(f"CV Match Score: {cv_score}%")
     st.caption(cv_summary_text)
 
-# ---- EXISTING INTERVIEW FLOW ----
+# ---- INTERVIEW FLOW ----
 uploaded_file = st.file_uploader(
     "Upload Interview File (Transcript / Audio / Video)",
     ["txt", "docx", "mp3", "wav", "mp4", "mov"]
@@ -268,12 +280,38 @@ Skills: {skill}%
 {GEMINI_SYSTEM_SUMMARY_PROMPT}
 """
         st.session_state.system_summary = gemini_model.generate_content(prompt).text
+
     st.write(st.session_state.system_summary)
 
-    # ---- INTERVIEWER INPUT ----
+    # ---- INTERVIEWER FEEDBACK ----
     st.subheader("🧑‍💼 Interviewer Feedback")
-    interviewer_comments = st.text_area("Comments", value=st.session_state.interviewer_feedback or "")
-    interviewer_fit = st.selectbox("Recommendation", ["Select", "Strong Yes", "Yes", "Borderline", "No"])
+
+    with st.expander("🎙️ Dictate feedback (optional)"):
+        audio_input = st.audio_input("Record interviewer feedback")
+        if audio_input:
+            with st.spinner("Transcribing audio..."):
+                audio_text = transcribe_interviewer_audio(audio_input.getvalue())
+
+            st.text_area(
+                "Transcription preview (editable)",
+                value=audio_text,
+                key="audio_preview",
+                height=150
+            )
+
+            if st.button("✅ Use this transcription"):
+                st.session_state.interviewer_feedback = audio_text
+                st.success("Transcription added to interviewer feedback")
+
+    interviewer_comments = st.text_area(
+        "Comments",
+        value=st.session_state.interviewer_feedback or ""
+    )
+
+    interviewer_fit = st.selectbox(
+        "Recommendation",
+        ["Select", "Strong Yes", "Yes", "Borderline", "No"]
+    )
 
     # ---- SYSTEM VS INTERVIEWER ----
     if interviewer_fit != "Select" and interviewer_comments:
