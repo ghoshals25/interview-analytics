@@ -6,7 +6,6 @@ import smtplib
 from email.message import EmailMessage
 import tempfile
 import subprocess
-import os
 
 from faster_whisper import WhisperModel
 import imageio_ffmpeg
@@ -17,7 +16,6 @@ import imageio_ffmpeg
 SENDER_EMAIL = "soumikghoshalireland@gmail.com"
 EMAIL_REGEX = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
 
-# Gemini / GenAI disabled
 LLM_ENABLED = False
 
 # =============================
@@ -48,15 +46,13 @@ def load_whisper_model():
 # =============================
 def read_transcript(uploaded_file):
     suffix = Path(uploaded_file.name).suffix.lower()
-
     if suffix == ".docx":
         doc = docx.Document(uploaded_file)
         return "\n".join(p.text for p in doc.paragraphs).lower()
-
     return uploaded_file.read().decode("utf-8", errors="ignore").lower()
 
 # =============================
-# TRANSCRIBE AUDIO (FASTER-WHISPER)
+# TRANSCRIBE AUDIO
 # =============================
 def transcribe_audio(audio_path):
     model = load_whisper_model()
@@ -75,41 +71,27 @@ def extract_audio_from_video(uploaded_file):
     ffmpeg_binary = imageio_ffmpeg.get_ffmpeg_exe()
 
     subprocess.run(
-        [
-            ffmpeg_binary,
-            "-y",
-            "-i", video_path,
-            "-ac", "1",
-            "-ar", "16000",
-            audio_path
-        ],
+        [ffmpeg_binary, "-y", "-i", video_path, "-ac", "1", "-ar", "16000", audio_path],
         check=True,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
-
     return audio_path
 
 # =============================
-# NORMALIZE INPUT → TEXT
+# NORMALIZE INPUT
 # =============================
 def extract_text(uploaded_file):
     suffix = Path(uploaded_file.name).suffix.lower()
-
     if suffix in [".txt", ".docx"]:
         return read_transcript(uploaded_file)
-
     if suffix in [".mp3", ".wav"]:
-        st.info("Audio interviews are transcribed automatically before analysis.")
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
             tmp.write(uploaded_file.read())
             return transcribe_audio(tmp.name)
-
     if suffix in [".mp4", ".mov"]:
-        st.info("Video interviews are converted to audio and transcribed automatically.")
         audio_path = extract_audio_from_video(uploaded_file)
         return transcribe_audio(audio_path)
-
     raise ValueError("Unsupported file format")
 
 # =============================
@@ -141,21 +123,18 @@ def is_valid_email(email):
 
 def send_email(subject, body, recipient):
     if not is_valid_email(recipient):
-        st.warning(f"⚠️ Skipping invalid email: {recipient}")
         return
-
     msg = EmailMessage()
     msg["Subject"] = subject
     msg["From"] = SENDER_EMAIL
     msg["To"] = recipient
     msg.set_content(body)
-
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
         server.login(SENDER_EMAIL, st.secrets["EMAIL_APP_PASSWORD"])
         server.send_message(msg)
 
 # =============================
-# STREAMLIT UI
+# UI
 # =============================
 st.set_page_config(page_title="Interview Analyzer", layout="centered")
 st.title("🎯 Interview Performance Analyzer")
@@ -187,29 +166,21 @@ if uploaded_file:
     st.write(st.session_state.system_summary)
 
     # =====================================================
-    # 🆕 INTERVIEWER VOICE FEEDBACK (ADD-ON, SAFE)
+    # 🎙️ LIVE INTERVIEWER DICTATION (CHATGPT-STYLE)
     # =====================================================
-    st.subheader("🎙️ Interviewer Voice Feedback (Optional)")
+    st.subheader("🎙️ Dictate Interviewer Feedback")
 
-    voice_feedback_file = st.file_uploader(
-        "Upload interviewer voice note (mp3 / wav)",
-        type=["mp3", "wav"],
-        key="interviewer_voice"
-    )
+    audio_bytes = st.audio_input("Click to record your feedback")
 
-    if voice_feedback_file:
-        st.info("Transcribing interviewer voice feedback…")
-
-        with tempfile.NamedTemporaryFile(delete=False, suffix=Path(voice_feedback_file.name).suffix) as tmp:
-            tmp.write(voice_feedback_file.read())
+    if audio_bytes:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+            tmp.write(audio_bytes)
             audio_path = tmp.name
 
-        try:
-            transcribed_feedback = transcribe_audio(audio_path)
-            st.session_state.interviewer_feedback = transcribed_feedback
-            st.success("✅ Voice feedback transcribed successfully")
-        except Exception:
-            st.error("❌ Failed to transcribe interviewer voice feedback")
+        with st.spinner("Transcribing voice feedback…"):
+            st.session_state.interviewer_feedback = transcribe_audio(audio_path)
+
+        st.success("✅ Dictation transcribed")
 
     # =====================================================
     # INTERVIEWER FEEDBACK (UNCHANGED FLOW)
@@ -234,7 +205,7 @@ if uploaded_file:
         st.write(st.session_state.comparison)
 
         if st.session_state.interviewer_feedback is None:
-            st.session_state.interviewer_feedback = "Interviewer coaching feedback unavailable (AI disabled)."
+            st.session_state.interviewer_feedback = "Interviewer coaching feedback unavailable."
 
         st.subheader("🧑‍🏫 Interviewer Coaching (Preview)")
         st.write(st.session_state.interviewer_feedback)
@@ -245,10 +216,6 @@ if uploaded_file:
         interviewer_email = st.text_input("Interviewer Email")
 
         if st.button("📤 Send Emails") and not st.session_state.emails_sent:
-            if not any([hr_email, candidate_email, interviewer_email]):
-                st.error("❌ Please enter at least one valid email address")
-                st.stop()
-
             st.session_state.emails_sent = True
 
             send_email(
@@ -256,13 +223,11 @@ if uploaded_file:
                 st.session_state.system_summary + "\n\n" + st.session_state.comparison,
                 hr_email
             )
-
             send_email(
                 "Your Interview Feedback",
                 "Thank you for interviewing. You will hear back soon.",
                 candidate_email
             )
-
             send_email(
                 "Interview Coaching Feedback (Private)",
                 st.session_state.interviewer_feedback,
