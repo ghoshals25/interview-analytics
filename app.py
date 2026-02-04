@@ -1,5 +1,5 @@
 # =============================
-# INTERVIEW ANALYZER – FULL MERGED VERSION
+# INTERVIEW ANALYZER – FINAL PRODUCTION VERSION
 # =============================
 
 import streamlit as st
@@ -67,7 +67,7 @@ def read_docx(file):
     return "\n".join(p.text for p in doc.paragraphs).lower()
 
 # =============================
-# ATS KEYWORDS
+# CAPABILITY KEYWORDS (FINAL)
 # =============================
 SKILL_BUCKETS = {
     "skills": [
@@ -98,7 +98,7 @@ def like_match(text, keyword):
     return keyword in text
 
 # =============================
-# UPDATED SCORING LOGIC
+# FINAL SCORING LOGIC (OVERLAP-BASED)
 # =============================
 def compute_cv_match(jd_text, cv_text):
     jd_text = normalize(jd_text)
@@ -130,82 +130,114 @@ def compute_cv_match(jd_text, cv_text):
     return overall_score, bucket_scores, details
 
 # =============================
-# UI
+# PAGE CONFIG
 # =============================
-st.set_page_config(page_title="Interview Analyzer", layout="wide")
+st.set_page_config(
+    page_title="Interview Analyzer",
+    layout="wide",
+)
+
 st.title("🎯 Interview Performance Analyzer")
+st.caption("Decision-support tool for structured interview preparation")
 
-st.subheader("🧩 Pre-Interview Context")
-job_description = st.text_area("Job Description")
-uploaded_cv = st.file_uploader("Upload CV (DOCX)", ["docx"])
+st.divider()
 
 # =============================
-# LEFT SIDEBAR: JD + CV ANALYSIS
+# SIDEBAR – JD & CV ANALYSIS
 # =============================
 with st.sidebar:
-    st.header("📄 JD & Candidate Analysis")
+    st.header("📄 JD & Candidate Overview")
+
+    if st.session_state.jd_cv_analysis:
+        st.markdown(st.session_state.jd_cv_analysis)
+    else:
+        st.caption("Upload a Job Description and CV to generate an overview")
+
+# =============================
+# MAIN LAYOUT
+# =============================
+left_col, right_col = st.columns([1.1, 1])
+
+# -----------------------------
+# LEFT: INPUTS + SCORE
+# -----------------------------
+with left_col:
+    st.subheader("🧩 Pre-Interview Context")
+
+    job_description = st.text_area(
+        "Job Description",
+        placeholder="Paste the full job description here…",
+        height=220
+    )
+
+    uploaded_cv = st.file_uploader(
+        "Candidate CV (DOCX)",
+        type=["docx"]
+    )
 
     if uploaded_cv and job_description:
-        cv_text_sidebar = read_docx(uploaded_cv)
-        jd_text_sidebar = job_description.lower()
+        cv_text = read_docx(uploaded_cv)
 
         if st.session_state.jd_cv_analysis is None:
             prompt = f"""
 JOB DESCRIPTION:
-{jd_text_sidebar}
+{job_description}
 
 CANDIDATE CV:
-{cv_text_sidebar}
+{cv_text}
 
 {GEMINI_JD_CV_ANALYSIS_PROMPT}
 """
             st.session_state.jd_cv_analysis = gemini_model.generate_content(prompt).text
 
-        st.markdown(st.session_state.jd_cv_analysis)
+        score, bucket_scores, details = compute_cv_match(job_description, cv_text)
+
+        st.divider()
+
+        st.metric(
+            label="CV–JD Alignment Score",
+            value=f"{score}%",
+            help="Overlap-based alignment between Job Description and CV"
+        )
+
+# -----------------------------
+# RIGHT: EXPLANATION
+# -----------------------------
+with right_col:
+    st.subheader("🔍 Interviewer Insight")
+
+    if uploaded_cv and job_description:
+        jd_focus = set()
+        cv_matches = set()
+        cv_gaps = set()
+
+        for info in details.values():
+            jd_focus.update(info["union"])
+            cv_matches.update(info["intersection"])
+            cv_gaps.update(info["missing"])
+
+        explanation = []
+
+        if jd_focus:
+            explanation.append(
+                f"The role emphasises {', '.join(sorted(jd_focus))}."
+            )
+
+        if cv_matches:
+            explanation.append(
+                f"The CV demonstrates clear experience in {', '.join(sorted(cv_matches))}."
+            )
+
+        if cv_gaps:
+            explanation.append(
+                f"However, the CV does not clearly surface evidence of {', '.join(sorted(cv_gaps))}, which are explicitly referenced in the job description."
+            )
+
+        explanation.append(
+            "These areas should be explored further during the interview to validate depth, ownership, and hands-on involvement."
+        )
+
+        st.write(" ".join(explanation))
     else:
-        st.caption("Upload CV and Job Description to view analysis")
+        st.caption("Upload both the Job Description and CV to view interviewer insights")
 
-# =============================
-# ATS SCORE + INTERVIEWER EXPLANATION
-# =============================
-if uploaded_cv and job_description:
-    cv_text = read_docx(uploaded_cv)
-
-    score, bucket_scores, details = compute_cv_match(job_description, cv_text)
-
-    st.success(f"CV Match Score: {score}%")
-
-    # ---- Interviewer-friendly explanation ----
-    st.subheader("🔍 Why this score?")
-
-    jd_focus = set()
-    cv_matches = set()
-    cv_gaps = set()
-
-    for info in details.values():
-        jd_focus.update(info["union"])
-        cv_matches.update(info["intersection"])
-        cv_gaps.update(info["missing"])
-
-    explanation_lines = []
-
-    if jd_focus:
-        explanation_lines.append(
-            f"The job description emphasises {', '.join(sorted(jd_focus))}."
-        )
-
-    if cv_matches:
-        explanation_lines.append(
-            f"The CV shows clear alignment in {', '.join(sorted(cv_matches))}."
-        )
-
-    if cv_gaps:
-        explanation_lines.append(
-            f"However, the CV does not clearly surface evidence of {', '.join(sorted(cv_gaps))}, which are explicitly referenced in the job description."
-        )
-
-    explanation_lines.append(
-        "These areas should be explored further during the interview to validate depth, ownership, and hands-on experience."
-    )
-
-    st.caption(" ".join(explanation_lines)[:700])
