@@ -18,9 +18,11 @@ SENDER_EMAIL = "soumikghoshalireland@gmail.com"
 EMAIL_REGEX = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
 
 LLM_ENABLED = True
+GEMINI_MODEL = "gemini-2.5-flash-lite"
 
-genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-gemini_model = genai.GenerativeModel("gemini-2.5-flash-lite")
+client = genai.Client(
+    api_key=st.secrets["GEMINI_API_KEY"]
+)
 
 # =============================
 # SESSION STATE
@@ -35,7 +37,7 @@ for key in [
         st.session_state[key] = None
 
 # =============================
-# RESET AI STATE (SAFE)
+# RESET AI STATE
 # =============================
 if st.button("🔄 Reset AI State"):
     st.session_state.system_summary = None
@@ -94,7 +96,7 @@ def extract_text(uploaded_file):
     raise ValueError("Unsupported file format")
 
 # =============================
-# SCORING (UNCHANGED)
+# SCORING (DETERMINISTIC)
 # =============================
 FILLER_WORDS = ["um", "uh", "like", "you know"]
 IMPACT_WORDS = ["%", "increased", "reduced", "improved"]
@@ -115,12 +117,17 @@ def overall_interview_score(comm, skill):
     return round(comm * 0.4 + skill * 0.6, 2)
 
 # =============================
-# GEMINI CALL (FIXED)
+# GEMINI CALL (CORRECT SDK)
 # =============================
-def gemini_generate(prompt):
-    response = gemini_model.generate_content(prompt)
+def gemini_generate(prompt: str) -> str:
+    response = client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=prompt
+    )
+
     if not response or not response.text:
         raise RuntimeError("Empty Gemini response")
+
     return response.text
 
 # =============================
@@ -215,7 +222,7 @@ Interview Skills: {skill}
     )
 
     # =============================
-    # SYSTEM vs INTERVIEWER
+    # SYSTEM vs INTERVIEWER (AI)
     # =============================
     if interviewer_fit != "Select" and interviewer_comments:
         st.subheader("🔍 System vs Interviewer Comparison")
