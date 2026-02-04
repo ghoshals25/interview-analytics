@@ -1,10 +1,3 @@
-import os
-import imageio_ffmpeg
-
-# Inject ffmpeg into PATH first
-ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
-os.environ["PATH"] = os.path.dirname(ffmpeg_path) + os.pathsep + os.environ.get("PATH", "")
-
 import streamlit as st
 import docx
 from pathlib import Path
@@ -13,8 +6,10 @@ import smtplib
 from email.message import EmailMessage
 import tempfile
 import subprocess
+import os
 
-import whisper
+from faster_whisper import WhisperModel
+import imageio_ffmpeg
 
 # =============================
 # CONSTANTS
@@ -22,7 +17,7 @@ import whisper
 SENDER_EMAIL = "soumikghoshalireland@gmail.com"
 EMAIL_REGEX = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
 
-# Gemini / GenAI fully disabled
+# Gemini / GenAI disabled
 LLM_ENABLED = False
 
 # =============================
@@ -38,11 +33,16 @@ for key in [
         st.session_state[key] = None
 
 # =============================
-# LOAD WHISPER MODEL (CACHED)
+# LOAD FASTER-WHISPER MODEL
 # =============================
 @st.cache_resource
 def load_whisper_model():
-    return whisper.load_model("base")
+    # CPU-only, cloud-safe
+    return WhisperModel(
+        "base",
+        device="cpu",
+        compute_type="int8"
+    )
 
 # =============================
 # READ TEXT TRANSCRIPT
@@ -57,36 +57,35 @@ def read_transcript(uploaded_file):
     return uploaded_file.read().decode("utf-8", errors="ignore").lower()
 
 # =============================
-# TRANSCRIBE AUDIO
+# TRANSCRIBE AUDIO (FASTER-WHISPER)
 # =============================
 def transcribe_audio(audio_path):
     model = load_whisper_model()
-    result = model.transcribe(audio_path)
-    return result["text"].lower()
+
+    segments, _ = model.transcribe(audio_path)
+    text = " ".join(segment.text for segment in segments)
+
+    return text.lower()
 
 # =============================
-# EXTRACT AUDIO FROM VIDEO (FIXED)
+# EXTRACT AUDIO FROM VIDEO
 # =============================
 def extract_audio_from_video(uploaded_file):
-    # Save uploaded video
     with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as video_tmp:
         video_tmp.write(uploaded_file.read())
         video_path = video_tmp.name
 
-    # Output audio path
     audio_path = tempfile.NamedTemporaryFile(delete=False, suffix=".wav").name
 
-    # Get bundled ffmpeg binary
     ffmpeg_binary = imageio_ffmpeg.get_ffmpeg_exe()
 
-    # Run ffmpeg directly (Streamlit Cloud safe)
     subprocess.run(
         [
             ffmpeg_binary,
-            "-y",                 # overwrite
-            "-i", video_path,     # input video
-            "-ac", "1",           # mono
-            "-ar", "16000",       # 16kHz
+            "-y",
+            "-i", video_path,
+            "-ac", "1",
+            "-ar", "16000",
             audio_path
         ],
         check=True,
