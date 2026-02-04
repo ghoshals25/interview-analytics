@@ -7,9 +7,9 @@ from email.message import EmailMessage
 import tempfile
 import subprocess
 
+import google.generativeai as genai
 from faster_whisper import WhisperModel
 import imageio_ffmpeg
-from google import genai
 
 # =============================
 # CONFIG
@@ -20,9 +20,43 @@ EMAIL_REGEX = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
 LLM_ENABLED = True
 GEMINI_MODEL = "gemini-2.5-flash-lite"
 
-client = genai.Client(
-    api_key=st.secrets["GEMINI_API_KEY"]
-)
+# =============================
+# GEMINI CONFIG
+# =============================
+genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+gemini_model = genai.GenerativeModel(GEMINI_MODEL)
+
+# =============================
+# GEMINI PROMPTS
+# =============================
+COMMON_GEMINI_CONSTRAINTS = """
+NON-NEGOTIABLE RULES:
+- Do NOT assign scores
+- Do NOT make hire decisions
+- Do NOT invent information
+- Use only provided data
+- Be concise and structured
+"""
+
+GEMINI_SYSTEM_SUMMARY_PROMPT = f"""
+You are interpreting interview evaluation results for internal review.
+
+{COMMON_GEMINI_CONSTRAINTS}
+
+Explain what the scores indicate about the candidate.
+Focus on clarity, strengths, and risks.
+"""
+
+GEMINI_INTERVIEWER_COACHING_PROMPT = f"""
+You are providing private coaching feedback.
+
+{COMMON_GEMINI_CONSTRAINTS}
+
+FORMAT:
+- What went well
+- What could be improved
+- Missed probing opportunities
+"""
 
 # =============================
 # SESSION STATE
@@ -42,17 +76,19 @@ for key in [
 if st.button("🔄 Reset AI State"):
     st.session_state.system_summary = None
     st.session_state.comparison = None
+    st.session_state.interviewer_feedback = None
+    st.session_state.emails_sent = False
     st.experimental_rerun()
 
 # =============================
-# LOAD FASTER-WHISPER
+# LOAD WHISPER
 # =============================
 @st.cache_resource
-def load_whisper_model():
+def load_whisper():
     return WhisperModel("base", device="cpu", compute_type="int8")
 
 # =============================
-# FILE HELPERS
+# FILE / AUDIO HELPERS
 # =============================
 def read_transcript(uploaded_file):
     suffix = Path(uploaded_file.name).suffix.lower()
@@ -61,21 +97,21 @@ def read_transcript(uploaded_file):
         return "\n".join(p.text for p in doc.paragraphs).lower()
     return uploaded_file.read().decode("utf-8", errors="ignore").lower()
 
-def transcribe_audio(audio_path):
-    model = load_whisper_model()
-    segments, _ = model.transcribe(audio_path)
-    return " ".join(segment.text for segment in segments).lower()
+def transcribe_audio(path):
+    model = load_whisper()
+    segments, _ = model.transcribe(path)
+    return " ".join(s.text for s in segments).lower()
 
 def extract_audio_from_video(uploaded_file):
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as video_tmp:
-        video_tmp.write(uploaded_file.read())
-        video_path = video_tmp.name
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as v:
+        v.write(uploaded_file.read())
+        video_path = v.name
 
     audio_path = tempfile.NamedTemporaryFile(delete=False, suffix=".wav").name
-    ffmpeg_binary = imageio_ffmpeg.get_ffmpeg_exe()
+    ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
 
     subprocess.run(
-        [ffmpeg_binary, "-y", "-i", video_path, "-ac", "1", "-ar", "16000", audio_path],
+        [ffmpeg, "-y", "-i", video_path, "-ac", "1", "-ar", "16000", audio_path],
         check=True,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -87,13 +123,13 @@ def extract_text(uploaded_file):
     if suffix in [".txt", ".docx"]:
         return read_transcript(uploaded_file)
     if suffix in [".mp3", ".wav"]:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-            tmp.write(uploaded_file.read())
-            return transcribe_audio(tmp.name)
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as t:
+            t.write(uploaded_file.read())
+            return transcribe_audio(t.name)
     if suffix in [".mp4", ".mov"]:
-        audio_path = extract_audio_from_video(uploaded_file)
-        return transcribe_audio(audio_path)
-    raise ValueError("Unsupported file format")
+        audio = extract_audio_from_video(uploaded_file)
+        return transcribe_audio(audio)
+    raise ValueError("Unsupported file type")
 
 # =============================
 # SCORING (DETERMINISTIC)
@@ -117,18 +153,20 @@ def overall_interview_score(comm, skill):
     return round(comm * 0.4 + skill * 0.6, 2)
 
 # =============================
-# GEMINI CALL (CORRECT SDK)
+# GEMINI HELPER (SAFE)
 # =============================
-def gemini_generate(prompt: str) -> str:
-    response = client.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=prompt
-    )
+def call_gemini(prompt):
+    if not LLM_ENABLED:
+        return "⚠️ AI disabled"
 
-    if not response or not response.text:
-        raise RuntimeError("Empty Gemini response")
-
-    return response.text
+    try:
+        response = gemini_model.generate_content(
+            prompt,
+            generation_config={"temperature": 0.2, "max_output_tokens": 400}
+        )
+        return response.text or "⚠️ Empty AI response"
+    except Exception as e:
+        return f"⚠️ Gemini unavailable: {e}"
 
 # =============================
 # EMAIL HELPERS
@@ -155,7 +193,7 @@ st.set_page_config(page_title="Interview Analyzer", layout="centered")
 st.title("🎯 Interview Performance Analyzer")
 
 uploaded_file = st.file_uploader(
-    "Upload Interview File (Transcript, Audio, or Video)",
+    "Upload Interview File (Transcript / Audio / Video)",
     ["txt", "docx", "mp3", "wav", "mp4", "mov"]
 )
 
@@ -175,37 +213,33 @@ if uploaded_file:
     st.metric("Interview Skills", f"{skill}%")
 
     # =============================
-    # SYSTEM INTERPRETATION (AI)
+    # SYSTEM INTERPRETATION
     # =============================
     st.subheader("🧠 System Interpretation")
     if st.session_state.system_summary is None:
-        try:
-            st.session_state.system_summary = gemini_generate(
-                f"""
-Interpret these interview scores professionally.
-Do NOT recommend hire/no-hire.
+        prompt = f"""
+SCORES:
+Overall: {final_score}%
+Communication: {comm}%
+Skills: {skill}%
 
-Communication: {comm}
-Interview Skills: {skill}
+{GEMINI_SYSTEM_SUMMARY_PROMPT}
 """
-            )
-        except Exception as e:
-            st.warning(f"Gemini unavailable: {e}")
+        st.session_state.system_summary = call_gemini(prompt)
 
-    if st.session_state.system_summary:
-        st.write(st.session_state.system_summary)
+    st.write(st.session_state.system_summary)
 
     # =============================
     # 🎙️ DICTATION
     # =============================
     st.subheader("🎙️ Dictate Interviewer Feedback")
-    audio_file = st.audio_input("Click to record your feedback")
+    audio = st.audio_input("Record feedback")
 
-    if audio_file:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
-            tmp.write(audio_file.read())
-            audio_path = tmp.name
-        st.session_state.interviewer_feedback = transcribe_audio(audio_path)
+    if audio:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as t:
+            t.write(audio.read())
+            st.session_state.interviewer_feedback = transcribe_audio(t.name)
+            st.session_state.comparison = None
 
     # =============================
     # INTERVIEWER INPUT
@@ -222,50 +256,45 @@ Interview Skills: {skill}
     )
 
     # =============================
-    # SYSTEM vs INTERVIEWER (AI)
+    # SYSTEM vs INTERVIEWER
     # =============================
     if interviewer_fit != "Select" and interviewer_comments:
         st.subheader("🔍 System vs Interviewer Comparison")
 
         if st.session_state.comparison is None:
-            try:
-                st.session_state.comparison = gemini_generate(
-                    f"""
-Compare system evaluation and interviewer feedback.
-Be neutral and factual.
-
-System:
+            comparison_prompt = f"""
+SYSTEM:
 Communication: {comm}
 Interview Skills: {skill}
 
-Interviewer Feedback:
+INTERVIEWER:
+Recommendation: {interviewer_fit}
+Comments:
 {interviewer_comments}
-"""
-                )
-            except Exception as e:
-                st.warning(f"Gemini unavailable: {e}")
 
-        if st.session_state.comparison:
-            st.write(st.session_state.comparison)
+Compare alignment and gaps factually.
+"""
+            st.session_state.comparison = call_gemini(comparison_prompt)
+
+        st.write(st.session_state.comparison)
 
         # =============================
         # AI COACHING
         # =============================
         st.subheader("🧑‍🏫 AI Coaching Feedback")
-        try:
-            ai_coaching = gemini_generate(
-                f"""
-You are a career coach.
-Give constructive, actionable feedback to the candidate.
-Do not mention scores or hiring decisions.
+        if st.session_state.interviewer_feedback is None:
+            coaching_prompt = f"""
+TRANSCRIPT:
+{text}
 
-Interviewer Comments:
+INTERVIEWER COMMENTS:
 {interviewer_comments}
+
+{GEMINI_INTERVIEWER_COACHING_PROMPT}
 """
-            )
-            st.write(ai_coaching)
-        except Exception as e:
-            st.warning(f"Gemini unavailable: {e}")
+            st.session_state.interviewer_feedback = call_gemini(coaching_prompt)
+
+        st.write(st.session_state.interviewer_feedback)
 
         # =============================
         # EMAILS
@@ -276,24 +305,28 @@ Interviewer Comments:
         interviewer_email = st.text_input("Interviewer Email")
 
         if st.button("📤 Send Emails") and not st.session_state.emails_sent:
-            st.session_state.emails_sent = True
+            if not any([hr_email, candidate_email, interviewer_email]):
+                st.error("❌ Please enter at least one valid email")
+                st.session_state.emails_sent = False
+            else:
+                st.session_state.emails_sent = True
 
-            send_email(
-                "HR Interview Summary",
-                (st.session_state.system_summary or "") + "\n\n" + (st.session_state.comparison or ""),
-                hr_email
-            )
+                send_email(
+                    "HR Interview Summary",
+                    st.session_state.system_summary + "\n\n" + st.session_state.comparison,
+                    hr_email
+                )
 
-            send_email(
-                "Your Interview Feedback",
-                ai_coaching,
-                candidate_email
-            )
+                send_email(
+                    "Your Interview Feedback",
+                    st.session_state.interviewer_feedback,
+                    candidate_email
+                )
 
-            send_email(
-                "Interview Coaching Feedback (Private)",
-                ai_coaching,
-                interviewer_email
-            )
+                send_email(
+                    "Interview Coaching Feedback (Private)",
+                    st.session_state.interviewer_feedback,
+                    interviewer_email
+                )
 
-            st.success("✅ Emails sent successfully")
+                st.success("✅ Emails sent successfully")
