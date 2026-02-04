@@ -9,15 +9,18 @@ import subprocess
 
 from faster_whisper import WhisperModel
 import imageio_ffmpeg
+import google.generativeai as genai
 
 # =============================
-# CONSTANTS
+# CONFIG
 # =============================
 SENDER_EMAIL = "soumikghoshalireland@gmail.com"
 EMAIL_REGEX = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
 
-# Gemini / GenAI disabled
-LLM_ENABLED = False
+LLM_ENABLED = True
+
+genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+gemini_model = genai.GenerativeModel("gemini-2.5-flash-lite")
 
 # =============================
 # SESSION STATE
@@ -32,39 +35,27 @@ for key in [
         st.session_state[key] = None
 
 # =============================
-# LOAD FASTER-WHISPER MODEL
+# LOAD FASTER-WHISPER
 # =============================
 @st.cache_resource
 def load_whisper_model():
-    return WhisperModel(
-        "base",
-        device="cpu",
-        compute_type="int8"
-    )
+    return WhisperModel("base", device="cpu", compute_type="int8")
 
 # =============================
-# READ TEXT TRANSCRIPT
+# FILE HELPERS
 # =============================
 def read_transcript(uploaded_file):
     suffix = Path(uploaded_file.name).suffix.lower()
-
     if suffix == ".docx":
         doc = docx.Document(uploaded_file)
         return "\n".join(p.text for p in doc.paragraphs).lower()
-
     return uploaded_file.read().decode("utf-8", errors="ignore").lower()
 
-# =============================
-# TRANSCRIBE AUDIO (FASTER-WHISPER)
-# =============================
 def transcribe_audio(audio_path):
     model = load_whisper_model()
     segments, _ = model.transcribe(audio_path)
     return " ".join(segment.text for segment in segments).lower()
 
-# =============================
-# EXTRACT AUDIO FROM VIDEO
-# =============================
 def extract_audio_from_video(uploaded_file):
     with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as video_tmp:
         video_tmp.write(uploaded_file.read())
@@ -74,45 +65,28 @@ def extract_audio_from_video(uploaded_file):
     ffmpeg_binary = imageio_ffmpeg.get_ffmpeg_exe()
 
     subprocess.run(
-        [
-            ffmpeg_binary,
-            "-y",
-            "-i", video_path,
-            "-ac", "1",
-            "-ar", "16000",
-            audio_path
-        ],
+        [ffmpeg_binary, "-y", "-i", video_path, "-ac", "1", "-ar", "16000", audio_path],
         check=True,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
-
     return audio_path
 
-# =============================
-# NORMALIZE INPUT → TEXT
-# =============================
 def extract_text(uploaded_file):
     suffix = Path(uploaded_file.name).suffix.lower()
-
     if suffix in [".txt", ".docx"]:
         return read_transcript(uploaded_file)
-
     if suffix in [".mp3", ".wav"]:
-        st.info("Audio interviews are transcribed automatically before analysis.")
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
             tmp.write(uploaded_file.read())
             return transcribe_audio(tmp.name)
-
     if suffix in [".mp4", ".mov"]:
-        st.info("Video interviews are converted to audio and transcribed automatically.")
         audio_path = extract_audio_from_video(uploaded_file)
         return transcribe_audio(audio_path)
-
     raise ValueError("Unsupported file format")
 
 # =============================
-# ANALYSIS LOGIC (UNCHANGED)
+# SCORING (UNCHANGED)
 # =============================
 FILLER_WORDS = ["um", "uh", "like", "you know"]
 IMPACT_WORDS = ["%", "increased", "reduced", "improved"]
@@ -133,6 +107,15 @@ def overall_interview_score(comm, skill):
     return round(comm * 0.4 + skill * 0.6, 2)
 
 # =============================
+# GEMINI HELPERS
+# =============================
+def gemini_generate(prompt):
+    try:
+        return gemini_model.generate_content(prompt).text
+    except Exception:
+        return "⚠️ AI feedback unavailable."
+
+# =============================
 # EMAIL HELPERS
 # =============================
 def is_valid_email(email):
@@ -140,21 +123,18 @@ def is_valid_email(email):
 
 def send_email(subject, body, recipient):
     if not is_valid_email(recipient):
-        st.warning(f"⚠️ Skipping invalid email: {recipient}")
         return
-
     msg = EmailMessage()
     msg["Subject"] = subject
     msg["From"] = SENDER_EMAIL
     msg["To"] = recipient
     msg.set_content(body)
-
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
         server.login(SENDER_EMAIL, st.secrets["EMAIL_APP_PASSWORD"])
         server.send_message(msg)
 
 # =============================
-# STREAMLIT UI
+# UI
 # =============================
 st.set_page_config(page_title="Interview Analyzer", layout="centered")
 st.title("🎯 Interview Performance Analyzer")
@@ -165,7 +145,7 @@ uploaded_file = st.file_uploader(
 )
 
 # =============================
-# MAIN PIPELINE
+# MAIN FLOW
 # =============================
 if uploaded_file:
     text = extract_text(uploaded_file)
@@ -180,33 +160,25 @@ if uploaded_file:
     st.metric("Interview Skills", f"{skill}%")
 
     if st.session_state.system_summary is None:
-        st.session_state.system_summary = "System-generated scores based on deterministic rules."
+        st.session_state.system_summary = gemini_generate(
+            f"Interpret these interview scores:\nCommunication: {comm}\nInterview Skills: {skill}"
+        )
 
     st.subheader("🧠 System Interpretation")
     st.write(st.session_state.system_summary)
 
-    # =====================================================
-    # 🎙️ LIVE DICTATION (FIXED)
-    # =====================================================
+    # 🎙️ LIVE DICTATION (UNCHANGED)
     st.subheader("🎙️ Dictate Interviewer Feedback")
-
     audio_file = st.audio_input("Click to record your feedback")
 
     if audio_file:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
-            tmp.write(audio_file.read())   # ✅ FIX
+            tmp.write(audio_file.read())
             audio_path = tmp.name
 
-        with st.spinner("Transcribing voice feedback…"):
-            st.session_state.interviewer_feedback = transcribe_audio(audio_path)
+        st.session_state.interviewer_feedback = transcribe_audio(audio_path)
 
-        st.success("✅ Dictation transcribed")
-
-    # =====================================================
-    # INTERVIEWER FEEDBACK (UNCHANGED FLOW)
-    # =====================================================
     st.subheader("🧑‍💼 Interviewer Feedback")
-
     interviewer_comments = st.text_area(
         "Comments",
         value=st.session_state.interviewer_feedback or ""
@@ -219,16 +191,27 @@ if uploaded_file:
 
     if interviewer_fit != "Select" and interviewer_comments:
         if st.session_state.comparison is None:
-            st.session_state.comparison = "Comparison based on system scores and interviewer judgment."
+            st.session_state.comparison = gemini_generate(
+                f"""
+Compare system evaluation and interviewer feedback.
+
+System Scores:
+Communication: {comm}
+Interview Skills: {skill}
+
+Interviewer Feedback:
+{interviewer_comments}
+"""
+            )
 
         st.subheader("🔍 System vs Interviewer Comparison")
         st.write(st.session_state.comparison)
 
-        if st.session_state.interviewer_feedback is None:
-            st.session_state.interviewer_feedback = "Interviewer coaching feedback unavailable (AI disabled)."
-
-        st.subheader("🧑‍🏫 Interviewer Coaching (Preview)")
-        st.write(st.session_state.interviewer_feedback)
+        st.subheader("🧑‍🏫 AI Coaching Feedback")
+        ai_coaching = gemini_generate(
+            f"Give constructive coaching feedback based on:\n{interviewer_comments}"
+        )
+        st.write(ai_coaching)
 
         st.subheader("📧 Send Reports")
         hr_email = st.text_input("HR Email")
@@ -236,10 +219,6 @@ if uploaded_file:
         interviewer_email = st.text_input("Interviewer Email")
 
         if st.button("📤 Send Emails") and not st.session_state.emails_sent:
-            if not any([hr_email, candidate_email, interviewer_email]):
-                st.error("❌ Please enter at least one valid email address")
-                st.stop()
-
             st.session_state.emails_sent = True
 
             send_email(
@@ -250,13 +229,13 @@ if uploaded_file:
 
             send_email(
                 "Your Interview Feedback",
-                "Thank you for interviewing. You will hear back soon.",
+                ai_coaching,
                 candidate_email
             )
 
             send_email(
                 "Interview Coaching Feedback (Private)",
-                st.session_state.interviewer_feedback,
+                ai_coaching,
                 interviewer_email
             )
 
