@@ -9,7 +9,7 @@ import subprocess
 
 from faster_whisper import WhisperModel
 import imageio_ffmpeg
-import google.generativeai as genai
+from google import genai
 
 # =============================
 # CONFIG
