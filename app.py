@@ -1,332 +1,209 @@
-import streamlit as st
-import docx
-from pathlib import Path
+# ============================================================
+# PRE-INTERVIEW + CV INTELLIGENCE ADD-ON (SAFE EXTENSION)
+# DOES NOT MODIFY EXISTING INTERVIEW ANALYZER LOGIC
+# ============================================================
+
 import re
-import smtplib
-from email.message import EmailMessage
-import tempfile
-import subprocess
+from collections import Counter
 
-import google.generativeai as genai
-from faster_whisper import WhisperModel
-import imageio_ffmpeg
+# -----------------------------
+# STEP 0: PRE-INTERVIEW CONTEXT
+# -----------------------------
+st.subheader("Pre-Interview Context")
 
-# =============================
-# CONFIG
-# =============================
-SENDER_EMAIL = "soumikghoshalireland@gmail.com"
-EMAIL_REGEX = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
+ROLE_OPTIONS = ["Analytics and Insights Lead"]
 
-LLM_ENABLED = True
-GEMINI_MODEL = "gemini-2.5-flash-lite"
-
-# =============================
-# GEMINI CONFIG
-# =============================
-genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-gemini_model = genai.GenerativeModel(GEMINI_MODEL)
-
-# =============================
-# GEMINI PROMPTS
-# =============================
-COMMON_GEMINI_CONSTRAINTS = """
-NON-NEGOTIABLE RULES:
-- Do NOT assign scores
-- Do NOT make hire decisions
-- Do NOT invent information
-- Use only provided data
-- Be concise and structured
-"""
-
-GEMINI_SYSTEM_SUMMARY_PROMPT = f"""
-You are interpreting interview evaluation results for internal review.
-
-{COMMON_GEMINI_CONSTRAINTS}
-
-Explain what the scores indicate about the candidate.
-Focus on clarity, strengths, and risks.
-"""
-
-GEMINI_INTERVIEWER_COACHING_PROMPT = f"""
-You are providing private coaching feedback.
-
-{COMMON_GEMINI_CONSTRAINTS}
-
-FORMAT:
-- What went well
-- What could be improved
-- Missed probing opportunities
-"""
-
-# =============================
-# SESSION STATE
-# =============================
-for key in [
-    "system_summary",
-    "interviewer_feedback",
-    "comparison",
-    "emails_sent"
-]:
-    if key not in st.session_state:
-        st.session_state[key] = None
-
-# =============================
-# RESET AI STATE
-# =============================
-if st.button("🔄 Reset AI State"):
-    st.session_state.system_summary = None
-    st.session_state.comparison = None
-    st.session_state.interviewer_feedback = None
-    st.session_state.emails_sent = False
-    st.experimental_rerun()
-
-# =============================
-# LOAD WHISPER
-# =============================
-@st.cache_resource
-def load_whisper():
-    return WhisperModel("base", device="cpu", compute_type="int8")
-
-# =============================
-# FILE / AUDIO HELPERS
-# =============================
-def read_transcript(uploaded_file):
-    suffix = Path(uploaded_file.name).suffix.lower()
-    if suffix == ".docx":
-        doc = docx.Document(uploaded_file)
-        return "\n".join(p.text for p in doc.paragraphs).lower()
-    return uploaded_file.read().decode("utf-8", errors="ignore").lower()
-
-def transcribe_audio(path):
-    model = load_whisper()
-    segments, _ = model.transcribe(path)
-    return " ".join(s.text for s in segments).lower()
-
-def extract_audio_from_video(uploaded_file):
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as v:
-        v.write(uploaded_file.read())
-        video_path = v.name
-
-    audio_path = tempfile.NamedTemporaryFile(delete=False, suffix=".wav").name
-    ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
-
-    subprocess.run(
-        [ffmpeg, "-y", "-i", video_path, "-ac", "1", "-ar", "16000", audio_path],
-        check=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    return audio_path
-
-def extract_text(uploaded_file):
-    suffix = Path(uploaded_file.name).suffix.lower()
-    if suffix in [".txt", ".docx"]:
-        return read_transcript(uploaded_file)
-    if suffix in [".mp3", ".wav"]:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as t:
-            t.write(uploaded_file.read())
-            return transcribe_audio(t.name)
-    if suffix in [".mp4", ".mov"]:
-        audio = extract_audio_from_video(uploaded_file)
-        return transcribe_audio(audio)
-    raise ValueError("Unsupported file type")
-
-# =============================
-# SCORING (DETERMINISTIC)
-# =============================
-FILLER_WORDS = ["um", "uh", "like", "you know"]
-IMPACT_WORDS = ["%", "increased", "reduced", "improved"]
-EXAMPLE_PHRASES = ["for example", "when i", "i worked on"]
-
-def communication_score(text):
-    return max(0, 100 - sum(text.count(w) for w in FILLER_WORDS) * 5)
-
-def interview_skill_score(text):
-    score = 0
-    if any(p in text for p in EXAMPLE_PHRASES):
-        score += 40
-    if any(p in text for p in IMPACT_WORDS):
-        score += 60
-    return min(score, 100)
-
-def overall_interview_score(comm, skill):
-    return round(comm * 0.4 + skill * 0.6, 2)
-
-# =============================
-# GEMINI HELPER (SAFE)
-# =============================
-def call_gemini(prompt):
-    if not LLM_ENABLED:
-        return "⚠️ AI disabled"
-
-    try:
-        response = gemini_model.generate_content(
-            prompt,
-            generation_config={"temperature": 0.2, "max_output_tokens": 400}
-        )
-        return response.text or "⚠️ Empty AI response"
-    except Exception as e:
-        return f"⚠️ Gemini unavailable: {e}"
-
-# =============================
-# EMAIL HELPERS
-# =============================
-def is_valid_email(email):
-    return email and re.match(EMAIL_REGEX, email)
-
-def send_email(subject, body, recipient):
-    if not is_valid_email(recipient):
-        return
-    msg = EmailMessage()
-    msg["Subject"] = subject
-    msg["From"] = SENDER_EMAIL
-    msg["To"] = recipient
-    msg.set_content(body)
-    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-        server.login(SENDER_EMAIL, st.secrets["EMAIL_APP_PASSWORD"])
-        server.send_message(msg)
-
-# =============================
-# UI
-# =============================
-st.set_page_config(page_title="Interview Analyzer", layout="centered")
-st.title("🎯 Interview Performance Analyzer")
-
-uploaded_file = st.file_uploader(
-    "Upload Interview File (Transcript / Audio / Video)",
-    ["txt", "docx", "mp3", "wav", "mp4", "mov"]
+selected_role = st.selectbox(
+    "Role applied for",
+    ROLE_OPTIONS,
+    index=0
 )
 
-# =============================
-# MAIN FLOW
-# =============================
-if uploaded_file:
-    text = extract_text(uploaded_file)
+job_description = st.text_area(
+    "Paste the Job Description",
+    height=220
+)
 
-    comm = communication_score(text)
-    skill = interview_skill_score(text)
-    final_score = overall_interview_score(comm, skill)
+uploaded_cv = st.file_uploader(
+    "Upload Candidate CV (PDF / DOCX)",
+    type=["docx", "pdf"]
+)
 
-    st.subheader("📊 System Scores")
-    st.metric("Overall Score", f"{final_score}%")
-    st.metric("Communication", f"{comm}%")
-    st.metric("Interview Skills", f"{skill}%")
+cv_text = ""
 
-    # =============================
-    # SYSTEM INTERPRETATION
-    # =============================
-    st.subheader("🧠 System Interpretation")
-    if st.session_state.system_summary is None:
-        prompt = f"""
-SCORES:
-Overall: {final_score}%
-Communication: {comm}%
-Skills: {skill}%
+if uploaded_cv and uploaded_cv.name.endswith(".docx"):
+    doc = docx.Document(uploaded_cv)
+    cv_text = "\n".join([p.text for p in doc.paragraphs])
 
-{GEMINI_SYSTEM_SUMMARY_PROMPT}
-"""
-        st.session_state.system_summary = call_gemini(prompt)
+# -----------------------------
+# ATS CONFIGURATION
+# -----------------------------
+SKILL_BUCKETS = {
+    "skills": [
+        "analytics", "insights", "strategy",
+        "stakeholder", "decision", "growth"
+    ],
+    "ownership": [
+        "led", "owned", "delivered",
+        "scaled", "managed", "built"
+    ],
+    "tools": [
+        "python", "sql", "power bi",
+        "tableau", "excel"
+    ]
+}
 
-    st.write(st.session_state.system_summary)
+# -----------------------------
+# TEXT UTILITIES
+# -----------------------------
+def normalize(text: str) -> str:
+    return re.sub(r"[^a-z0-9 ]", " ", text.lower())
 
-    # =============================
-    # 🎙️ DICTATION
-    # =============================
-    st.subheader("🎙️ Dictate Interviewer Feedback")
-    audio = st.audio_input("Record feedback")
+def keyword_frequency(text, keywords):
+    words = normalize(text).split()
+    counter = Counter(words)
+    return {k: counter[k] for k in keywords}
 
-    if audio:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as t:
-            t.write(audio.read())
-            st.session_state.interviewer_feedback = transcribe_audio(t.name)
-            st.session_state.comparison = None
+# -----------------------------
+# CV ↔ JD MATCH ENGINE
+# -----------------------------
+def compute_cv_match(jd_text, cv_text):
+    breakdown = {}
+    percentages = []
 
-    # =============================
-    # INTERVIEWER INPUT
-    # =============================
-    st.subheader("🧑‍💼 Interviewer Feedback")
-    interviewer_comments = st.text_area(
-        "Comments",
-        value=st.session_state.interviewer_feedback or ""
+    for bucket, keywords in SKILL_BUCKETS.items():
+        jd_freq = keyword_frequency(jd_text, keywords)
+        cv_freq = keyword_frequency(cv_text, keywords)
+
+        matched = sum(
+            1 for k in keywords
+            if jd_freq[k] > 0 and cv_freq[k] > 0
+        )
+
+        pct = round((matched / len(keywords)) * 100, 1)
+
+        breakdown[bucket] = {
+            "matched": matched,
+            "total": len(keywords),
+            "percentage": pct
+        }
+
+        percentages.append(pct)
+
+    overall_score = round(sum(percentages) / len(percentages), 1)
+    return overall_score, breakdown
+
+# -----------------------------
+# CV SUMMARY (CONCISE)
+# -----------------------------
+def generate_cv_summary(cv_score, breakdown):
+    strengths = []
+    gaps = []
+
+    for bucket, data in breakdown.items():
+        if data["percentage"] >= 70:
+            strengths.append(bucket)
+        elif data["percentage"] < 40:
+            gaps.append(bucket)
+
+    summary = f"CV shows a {cv_score}% alignment with the role requirements."
+
+    if strengths:
+        summary += f" Strong alignment in {', '.join(strengths)}."
+
+    if gaps:
+        summary += f" Gaps observed in {', '.join(gaps)}."
+
+    return summary
+
+# -----------------------------
+# EXECUTE CV MATCH
+# -----------------------------
+cv_match_score = None
+cv_breakdown = None
+cv_summary = None
+
+if job_description and cv_text:
+    cv_match_score, cv_breakdown = compute_cv_match(
+        job_description, cv_text
+    )
+    cv_summary = generate_cv_summary(
+        cv_match_score, cv_breakdown
     )
 
-    interviewer_fit = st.selectbox(
-        "Recommendation",
-        ["Select", "Strong Yes", "Yes", "Borderline", "No"]
+    st.info(f"CV Match Score: {cv_match_score}%")
+
+# -----------------------------
+# CV ↔ INTERVIEW CORRELATION
+# -----------------------------
+def correlate_cv_with_interview(
+    cv_breakdown,
+    interview_text,
+    interviewer_comments
+):
+    insights = []
+    interview_text = normalize(interview_text or "")
+    interviewer_comments = normalize(interviewer_comments or "")
+
+    if cv_breakdown["tools"]["percentage"] >= 70:
+        if not any(t in interview_text for t in SKILL_BUCKETS["tools"]):
+            insights.append(
+                "Tools strongly listed in CV were not clearly evidenced during the interview."
+            )
+
+    if cv_breakdown["ownership"]["percentage"] < 40:
+        if any(w in interview_text for w in ["led", "owned", "managed"]):
+            insights.append(
+                "Leadership and ownership demonstrated in interview beyond CV evidence."
+            )
+
+    if not insights:
+        insights.append(
+            "CV claims and interview discussion appear largely consistent."
+        )
+
+    return insights
+
+def cv_interview_alignment_status(insights):
+    if any("not" in i.lower() for i in insights):
+        return "Partially Validated"
+    return "Validated"
+
+# -----------------------------
+# RUN CORRELATION (USES EXISTING VARIABLES)
+# -----------------------------
+cv_interview_insights = []
+alignment_status = None
+
+if cv_breakdown:
+    cv_interview_insights = correlate_cv_with_interview(
+        cv_breakdown,
+        interview_transcript_text,    # EXISTING VARIABLE
+        interviewer_comments_text     # EXISTING VARIABLE
     )
 
-    # =============================
-    # SYSTEM vs INTERVIEWER
-    # =============================
-    if interviewer_fit != "Select" and interviewer_comments:
-        st.subheader("🔍 System vs Interviewer Comparison")
+    alignment_status = cv_interview_alignment_status(
+        cv_interview_insights
+    )
 
-        if st.session_state.comparison is None:
-            comparison_prompt = f"""
-SYSTEM:
-Communication: {comm}
-Interview Skills: {skill}
+# -----------------------------
+# EMAIL BLOCKS (APPEND ONLY)
+# -----------------------------
+cv_hr_block = f"""
+CV FIT SNAPSHOT
+---------------
+CV Match Score: {cv_match_score}%
+Summary: {cv_summary}
 
-INTERVIEWER:
-Recommendation: {interviewer_fit}
-Comments:
-{interviewer_comments}
+CV ↔ Interview Validation:
+Status: {alignment_status}
+""" + "\n".join([f"- {i}" for i in cv_interview_insights])
 
-Compare alignment and gaps factually.
-"""
-            st.session_state.comparison = call_gemini(comparison_prompt)
 
-        st.write(st.session_state.comparison)
+cv_interviewer_block = f"""
+CV CONTEXT
+----------
+CV Match Score: {cv_match_score}%
 
-        # =============================
-        # AI COACHING
-        # =============================
-        st.subheader("🧑‍🏫 AI Coaching Feedback")
-        if st.session_state.interviewer_feedback is None:
-            coaching_prompt = f"""
-TRANSCRIPT:
-{text}
-
-INTERVIEWER COMMENTS:
-{interviewer_comments}
-
-{GEMINI_INTERVIEWER_COACHING_PROMPT}
-"""
-            st.session_state.interviewer_feedback = call_gemini(coaching_prompt)
-
-        st.write(st.session_state.interviewer_feedback)
-
-        # =============================
-        # EMAILS
-        # =============================
-        st.subheader("📧 Send Reports")
-        hr_email = st.text_input("HR Email")
-        candidate_email = st.text_input("Candidate Email")
-        interviewer_email = st.text_input("Interviewer Email")
-
-        if st.button("📤 Send Emails") and not st.session_state.emails_sent:
-            if not any([hr_email, candidate_email, interviewer_email]):
-                st.error("❌ Please enter at least one valid email")
-                st.session_state.emails_sent = False
-            else:
-                st.session_state.emails_sent = True
-
-                send_email(
-                    "HR Interview Summary",
-                    st.session_state.system_summary + "\n\n" + st.session_state.comparison,
-                    hr_email
-                )
-
-                send_email(
-                    "Your Interview Feedback",
-                    st.session_state.interviewer_feedback,
-                    candidate_email
-                )
-
-                send_email(
-                    "Interview Coaching Feedback (Private)",
-                    st.session_state.interviewer_feedback,
-                    interviewer_email
-                )
-
-                st.success("✅ Emails sent successfully")
+Key Observations:
+""" + "\n".join([f"- {i}" for i in cv_interview_insights])
