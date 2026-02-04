@@ -35,7 +35,7 @@ for key in [
         st.session_state[key] = None
 
 # =============================
-# RESET AI STATE (IMPORTANT)
+# RESET AI STATE (SAFE)
 # =============================
 if st.button("🔄 Reset AI State"):
     st.session_state.system_summary = None
@@ -94,7 +94,7 @@ def extract_text(uploaded_file):
     raise ValueError("Unsupported file format")
 
 # =============================
-# SCORING (DETERMINISTIC)
+# SCORING (UNCHANGED)
 # =============================
 FILLER_WORDS = ["um", "uh", "like", "you know"]
 IMPACT_WORDS = ["%", "increased", "reduced", "improved"]
@@ -115,13 +115,13 @@ def overall_interview_score(comm, skill):
     return round(comm * 0.4 + skill * 0.6, 2)
 
 # =============================
-# GEMINI HELPER
+# GEMINI CALL (FIXED)
 # =============================
 def gemini_generate(prompt):
-    try:
-        return gemini_model.generate_content(prompt).text
-    except Exception as e:
-        return "⚠️ AI feedback unavailable."
+    response = gemini_model.generate_content(prompt)
+    if not response or not response.text:
+        raise RuntimeError("Empty Gemini response")
+    return response.text
 
 # =============================
 # EMAIL HELPERS
@@ -170,25 +170,26 @@ if uploaded_file:
     # =============================
     # SYSTEM INTERPRETATION (AI)
     # =============================
-    if st.session_state.system_summary is None:
-        st.session_state.system_summary = gemini_generate(
-            f"""
-You are an interview analyst.
-
-Interpret the following interview scores.
-Be factual, balanced, and professional.
-Do NOT recommend hiring or rejection.
-
-Communication Score: {comm}
-Interview Skill Score: {skill}
-"""
-        )
-
     st.subheader("🧠 System Interpretation")
-    st.write(st.session_state.system_summary)
+    if st.session_state.system_summary is None:
+        try:
+            st.session_state.system_summary = gemini_generate(
+                f"""
+Interpret these interview scores professionally.
+Do NOT recommend hire/no-hire.
+
+Communication: {comm}
+Interview Skills: {skill}
+"""
+            )
+        except Exception as e:
+            st.warning(f"Gemini unavailable: {e}")
+
+    if st.session_state.system_summary:
+        st.write(st.session_state.system_summary)
 
     # =============================
-    # 🎙️ LIVE DICTATION
+    # 🎙️ DICTATION
     # =============================
     st.subheader("🎙️ Dictate Interviewer Feedback")
     audio_file = st.audio_input("Click to record your feedback")
@@ -214,45 +215,50 @@ Interview Skill Score: {skill}
     )
 
     # =============================
-    # SYSTEM vs INTERVIEWER (AI)
+    # SYSTEM vs INTERVIEWER
     # =============================
     if interviewer_fit != "Select" and interviewer_comments:
+        st.subheader("🔍 System vs Interviewer Comparison")
+
         if st.session_state.comparison is None:
-            st.session_state.comparison = gemini_generate(
-                f"""
+            try:
+                st.session_state.comparison = gemini_generate(
+                    f"""
 Compare system evaluation and interviewer feedback.
+Be neutral and factual.
 
 System:
-Communication Score: {comm}
-Interview Skill Score: {skill}
+Communication: {comm}
+Interview Skills: {skill}
 
 Interviewer Feedback:
 {interviewer_comments}
-
-Focus on alignment or mismatch. Be neutral.
 """
-            )
+                )
+            except Exception as e:
+                st.warning(f"Gemini unavailable: {e}")
 
-        st.subheader("🔍 System vs Interviewer Comparison")
-        st.write(st.session_state.comparison)
+        if st.session_state.comparison:
+            st.write(st.session_state.comparison)
 
         # =============================
-        # AI COACHING FEEDBACK
+        # AI COACHING
         # =============================
         st.subheader("🧑‍🏫 AI Coaching Feedback")
-        ai_coaching = gemini_generate(
-            f"""
+        try:
+            ai_coaching = gemini_generate(
+                f"""
 You are a career coach.
-
-Provide constructive, actionable feedback for the candidate
-based on the interviewer comments below.
+Give constructive, actionable feedback to the candidate.
 Do not mention scores or hiring decisions.
 
 Interviewer Comments:
 {interviewer_comments}
 """
-        )
-        st.write(ai_coaching)
+            )
+            st.write(ai_coaching)
+        except Exception as e:
+            st.warning(f"Gemini unavailable: {e}")
 
         # =============================
         # EMAILS
@@ -267,7 +273,7 @@ Interviewer Comments:
 
             send_email(
                 "HR Interview Summary",
-                st.session_state.system_summary + "\n\n" + st.session_state.comparison,
+                (st.session_state.system_summary or "") + "\n\n" + (st.session_state.comparison or ""),
                 hr_email
             )
 
