@@ -1,3 +1,10 @@
+import os
+import imageio_ffmpeg
+
+# Inject ffmpeg into PATH first
+ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
+os.environ["PATH"] = os.path.dirname(ffmpeg_path) + os.pathsep + os.environ.get("PATH", "")
+
 import streamlit as st
 import docx
 from pathlib import Path
@@ -8,7 +15,6 @@ import tempfile
 import subprocess
 
 import whisper
-import imageio_ffmpeg
 
 # =============================
 # CONSTANTS
