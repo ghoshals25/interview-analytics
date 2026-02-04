@@ -1,29 +1,18 @@
 # =============================
 # INTERVIEW ANALYZER – FULL MERGED VERSION
-# (Canonical + ATS LIKE-matching + Explanation)
 # =============================
 
 import streamlit as st
 import docx
-from pathlib import Path
 import re
-import smtplib
-from email.message import EmailMessage
-import tempfile
-import subprocess
+from pathlib import Path
 from collections import Counter
 
 import google.generativeai as genai
-from faster_whisper import WhisperModel
-import imageio_ffmpeg
 
 # =============================
 # CONFIG
 # =============================
-SENDER_EMAIL = "soumikghoshalireland@gmail.com"
-EMAIL_REGEX = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
-
-LLM_ENABLED = True
 GEMINI_MODEL = "gemini-2.5-flash-lite"
 
 # =============================
@@ -33,7 +22,7 @@ genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 gemini_model = genai.GenerativeModel(GEMINI_MODEL)
 
 # =============================
-# GEMINI PROMPTS (UNCHANGED)
+# GEMINI PROMPTS
 # =============================
 COMMON_GEMINI_CONSTRAINTS = """
 NON-NEGOTIABLE RULES:
@@ -61,31 +50,16 @@ Key JD Highlights:
 - 5 concise bullets capturing role expectations
 
 Top 10 Candidate Skills:
-- Bullet list (skills must be inferred directly from CV)
+- Bullet list (skills inferred directly from CV)
 
 Top 5 Interview Questions:
-- Role-relevant, probing, non-generic questions
-"""
-
-GEMINI_SYSTEM_SUMMARY_PROMPT = f"""
-You are interpreting interview evaluation results for internal review.
-
-{COMMON_GEMINI_CONSTRAINTS}
-
-Explain what the scores indicate about the candidate.
-Focus on clarity, strengths, and risks.
+- Role-relevant, probing questions
 """
 
 # =============================
 # SESSION STATE
 # =============================
-for key in [
-    "system_summary",
-    "interviewer_feedback",
-    "comparison",
-    "emails_sent",
-    "jd_cv_analysis"
-]:
+for key in ["jd_cv_analysis"]:
     if key not in st.session_state:
         st.session_state[key] = None
 
@@ -97,9 +71,8 @@ def read_docx(file):
     return "\n".join(p.text for p in doc.paragraphs).lower()
 
 # =============================
-# ATS ENGINE (UNCHANGED SCORING)
+# ATS ENGINE (LIKE MATCHING)
 # =============================
-
 SKILL_BUCKETS = {
     "skills": [
         "analytics", "data analysis", "insights", "business insights",
@@ -141,13 +114,12 @@ def compute_cv_match(jd_text, cv_text):
         missing = jd_hits.difference(cv_hits)
 
         pct = round((len(matched) / len(keywords)) * 100, 1)
-
         scores[bucket] = pct
         pct_list.append(pct)
 
         details[bucket] = {
-            "matched": sorted(matched),
-            "missing": sorted(missing)
+            "matched": matched,
+            "missing": missing
         }
 
     overall = round(sum(pct_list) / len(pct_list), 1)
@@ -162,7 +134,6 @@ def cv_summary(score, breakdown):
         summary += f" Strong signals in {', '.join(strengths)}."
     if gaps:
         summary += f" Limited surface evidence in {', '.join(gaps)}."
-
     return summary
 
 # =============================
@@ -176,7 +147,7 @@ job_description = st.text_area("Job Description")
 uploaded_cv = st.file_uploader("Upload CV (DOCX)", ["docx"])
 
 # =============================
-# LEFT SIDEBAR (UNCHANGED)
+# LEFT SIDEBAR: JD + CV ANALYSIS
 # =============================
 with st.sidebar:
     st.header("📄 JD & Candidate Analysis")
@@ -202,46 +173,45 @@ CANDIDATE CV:
         st.caption("Upload CV and Job Description to view analysis")
 
 # =============================
-# ATS SCORE + EXPLANATION
+# ATS SCORE + CONCISE EXPLANATION
 # =============================
 if uploaded_cv and job_description:
     cv_text = read_docx(uploaded_cv)
+
     score, breakdown, details = compute_cv_match(job_description, cv_text)
     summary = cv_summary(score, breakdown)
 
     st.success(f"CV Match Score: {score}%")
     st.caption(summary)
 
+    # ---- Concise interviewer-facing explanation ----
     st.subheader("🔍 Why this score?")
 
-jd_expectations = set()
-cv_covered = set()
-cv_missing = set()
+    jd_expectations = set()
+    cv_missing = set()
 
-for bucket, info in details.items():
-    jd_expectations.update(info["matched"])
-    cv_covered.update(info["matched"])
-    cv_missing.update(info["missing"])
+    for info in details.values():
+        jd_expectations.update(info["matched"])
+        cv_missing.update(info["missing"])
 
-summary_lines = []
+    explanation = []
 
-if jd_expectations:
-    summary_lines.append(
-        f"The job description places emphasis on {', '.join(sorted(jd_expectations))}."
+    if jd_expectations:
+        explanation.append(
+            f"The role emphasises {', '.join(sorted(jd_expectations))}."
+        )
+
+    if cv_missing:
+        explanation.append(
+            f"The CV does not clearly demonstrate {', '.join(sorted(cv_missing))}, which are explicitly mentioned in the job description."
+        )
+    else:
+        explanation.append(
+            "The CV broadly covers the key areas highlighted in the job description."
+        )
+
+    explanation.append(
+        "These areas should be probed further during the interview to assess depth and hands-on experience."
     )
 
-if cv_missing:
-    summary_lines.append(
-        f"The CV does not clearly demonstrate experience in {', '.join(sorted(cv_missing))}, which are explicitly mentioned in the JD."
-    )
-
-if not cv_missing:
-    summary_lines.append(
-        "The CV broadly covers the key areas highlighted in the job description."
-    )
-
-summary_lines.append(
-    "These areas should be probed further during the interview to validate depth and hands-on experience."
-)
-
-st.caption(" ".join(summary_lines)[:700])
+    st.caption(" ".join(explanation)[:700])
