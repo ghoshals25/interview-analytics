@@ -37,7 +37,6 @@ for key in [
 # =============================
 @st.cache_resource
 def load_whisper_model():
-    # CPU-only, cloud-safe
     return WhisperModel(
         "base",
         device="cpu",
@@ -61,11 +60,8 @@ def read_transcript(uploaded_file):
 # =============================
 def transcribe_audio(audio_path):
     model = load_whisper_model()
-
     segments, _ = model.transcribe(audio_path)
-    text = " ".join(segment.text for segment in segments)
-
-    return text.lower()
+    return " ".join(segment.text for segment in segments).lower()
 
 # =============================
 # EXTRACT AUDIO FROM VIDEO
@@ -76,7 +72,6 @@ def extract_audio_from_video(uploaded_file):
         video_path = video_tmp.name
 
     audio_path = tempfile.NamedTemporaryFile(delete=False, suffix=".wav").name
-
     ffmpeg_binary = imageio_ffmpeg.get_ffmpeg_exe()
 
     subprocess.run(
@@ -191,8 +186,41 @@ if uploaded_file:
     st.subheader("🧠 System Interpretation")
     st.write(st.session_state.system_summary)
 
+    # =====================================================
+    # 🆕 INTERVIEWER VOICE FEEDBACK (ADD-ON, SAFE)
+    # =====================================================
+    st.subheader("🎙️ Interviewer Voice Feedback (Optional)")
+
+    voice_feedback_file = st.file_uploader(
+        "Upload interviewer voice note (mp3 / wav)",
+        type=["mp3", "wav"],
+        key="interviewer_voice"
+    )
+
+    if voice_feedback_file:
+        st.info("Transcribing interviewer voice feedback…")
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=Path(voice_feedback_file.name).suffix) as tmp:
+            tmp.write(voice_feedback_file.read())
+            audio_path = tmp.name
+
+        try:
+            transcribed_feedback = transcribe_audio(audio_path)
+            st.session_state.interviewer_feedback = transcribed_feedback
+            st.success("✅ Voice feedback transcribed successfully")
+        except Exception:
+            st.error("❌ Failed to transcribe interviewer voice feedback")
+
+    # =====================================================
+    # INTERVIEWER FEEDBACK (UNCHANGED FLOW)
+    # =====================================================
     st.subheader("🧑‍💼 Interviewer Feedback")
-    interviewer_comments = st.text_area("Comments")
+
+    interviewer_comments = st.text_area(
+        "Comments",
+        value=st.session_state.interviewer_feedback or ""
+    )
+
     interviewer_fit = st.selectbox(
         "Recommendation",
         ["Select", "Strong Yes", "Yes", "Borderline", "No"]
