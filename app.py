@@ -213,17 +213,35 @@ if uploaded_cv and job_description:
     st.caption(summary)
 
     st.subheader("🔍 Why this score?")
-    for bucket, info in details.items():
-        st.markdown(f"**{bucket.capitalize()}**")
 
-        if info["matched"]:
-            st.markdown(f"- ✅ Matched: {', '.join(info['matched'])}")
-        else:
-            st.markdown("- ⚠️ No clear matches found")
+jd_expectations = set()
+cv_covered = set()
+cv_missing = set()
 
-        if info["missing"]:
-            st.markdown(f"- ❌ Missing from CV (present in JD): {', '.join(info['missing'])}")
-        else:
-            st.markdown("- ✅ No major gaps detected")
+for bucket, info in details.items():
+    jd_expectations.update(info["matched"])
+    cv_covered.update(info["matched"])
+    cv_missing.update(info["missing"])
 
-st.info("Interview analysis, Gemini interpretation, audio dictation, and email flows continue unchanged below.")
+summary_lines = []
+
+if jd_expectations:
+    summary_lines.append(
+        f"The job description places emphasis on {', '.join(sorted(jd_expectations))}."
+    )
+
+if cv_missing:
+    summary_lines.append(
+        f"The CV does not clearly demonstrate experience in {', '.join(sorted(cv_missing))}, which are explicitly mentioned in the JD."
+    )
+
+if not cv_missing:
+    summary_lines.append(
+        "The CV broadly covers the key areas highlighted in the job description."
+    )
+
+summary_lines.append(
+    "These areas should be probed further during the interview to validate depth and hands-on experience."
+)
+
+st.caption(" ".join(summary_lines)[:700])
