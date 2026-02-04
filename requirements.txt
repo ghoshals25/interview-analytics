@@ -1,6 +1,6 @@
 streamlit
 python-docx
 google-generativeai
-openai-whisper
+faster-whisper
 ffmpeg-python
 imageio-ffmpeg
