@@ -4,3 +4,4 @@ google-generativeai
 faster-whisper
 ffmpeg-python
 imageio-ffmpeg
+PyPDF2
