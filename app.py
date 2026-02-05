@@ -278,4 +278,78 @@ INTERVIEW TRANSCRIPT:
         if not st.session_state.interview_comparison:
             prompt = f"""
 SYSTEM ANALYSIS:
-{st.session_state.int_
+{st.session_state.interview_system_analysis}
+
+INTERVIEWER FEEDBACK:
+{st.session_state.interviewer_comments}
+
+{GEMINI_COMPARISON_PROMPT}
+"""
+            st.session_state.interview_comparison = gemini_model.generate_content(prompt).text
+
+        st.subheader("🔍 System vs Interviewer Comparison")
+        st.markdown(st.session_state.interview_comparison)
+
+        # =============================
+        # EMAIL ROUTING
+        # =============================
+        st.subheader("📧 Send Interview Results")
+
+        candidate_email = st.text_input("Candidate Email")
+        hr_email = st.text_input("HR Email")
+        interviewer_email = st.text_input("Interviewer Email")
+
+        if st.button("Send Emails") and not st.session_state.emails_sent:
+            st.session_state.emails_sent = True
+
+            candidate_body = f"""
+Thank you for taking the time to interview with us.
+
+Strengths observed:
+- Clear communication
+- Learning mindset
+
+Areas to develop:
+- Handling complex situations
+- Demonstrating deeper ownership
+
+We will be in touch regarding next steps.
+"""
+
+            hr_body = f"""
+FULL INTERVIEW SUMMARY
+
+PRE-INTERVIEW (JD–CV):
+{st.session_state.jd_cv_analysis}
+
+SYSTEM INTERVIEW ANALYSIS:
+{st.session_state.interview_system_analysis}
+
+INTERVIEWER FEEDBACK:
+{st.session_state.interviewer_comments}
+
+SYSTEM vs INTERVIEWER:
+{st.session_state.interview_comparison}
+
+RECOMMENDATION:
+{recommendation}
+"""
+
+            interviewer_body = f"""
+INTERVIEW SUMMARY
+
+YOUR FEEDBACK:
+{st.session_state.interviewer_comments}
+
+SYSTEM COMPARISON:
+{st.session_state.interview_comparison}
+
+COACHING FEEDBACK:
+{gemini_model.generate_content(GEMINI_INTERVIEWER_COACHING_PROMPT).text}
+"""
+
+            send_email("Interview Outcome", candidate_body, candidate_email)
+            send_email("Interview Evaluation – Internal", hr_body, hr_email)
+            send_email("Interviewer Coaching Feedback", interviewer_body, interviewer_email)
+
+            st.success("✅ Emails sent successfully")
