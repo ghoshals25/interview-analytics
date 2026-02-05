@@ -6,14 +6,11 @@ import streamlit as st
 import docx
 import re
 import tempfile
-import subprocess
-from pathlib import Path
 from email.message import EmailMessage
 import smtplib
 
 import google.generativeai as genai
 from faster_whisper import WhisperModel
-import imageio_ffmpeg
 
 # =============================
 # PAGE CONFIG
@@ -91,7 +88,6 @@ Provide coaching feedback for the interviewer.
 # =============================
 for key in [
     "jd_cv_analysis",
-    "overlap",
     "interview_analysis",
     "comparison",
     "interviewer_comments",
@@ -162,12 +158,15 @@ with pre_tab:
     cv = st.file_uploader("Candidate CV (DOCX)", ["docx"])
 
     if st.button("✅ Apply Pre-Interview Inputs"):
-        if jd and cv:
+        if not jd or not cv:
+            st.warning("Please provide both JD and CV")
+        else:
             cv_text = read_docx(cv)
             st.session_state.jd_cv_analysis = gemini_model.generate_content(
                 f"JD:\n{jd}\n\nCV:\n{cv_text}\n\n{GEMINI_JD_CV_ANALYSIS_PROMPT}"
             ).text
             st.session_state.pre_applied = True
+            st.success("JD & CV applied successfully")
 
 # =====================================================
 # POST-INTERVIEW TAB
@@ -180,16 +179,15 @@ with post_tab:
     )
 
     if interview_file and st.button("✅ Apply Interview Inputs"):
-        if interview_file:
-            if interview_file.name.endswith(".docx"):
-                interview_text = read_docx(interview_file)
-            else:
-                interview_text = interview_file.read().decode("utf-8", errors="ignore")
+        if interview_file.name.endswith(".docx"):
+            interview_text = read_docx(interview_file)
+        else:
+            interview_text = interview_file.read().decode("utf-8", errors="ignore")
 
-            st.session_state.interview_analysis = gemini_model.generate_content(
-                f"{interview_text}\n\n{GEMINI_INTERVIEW_ANALYSIS_PROMPT}"
-            ).text
-            st.session_state.post_applied = True
+        st.session_state.interview_analysis = gemini_model.generate_content(
+            f"{interview_text}\n\n{GEMINI_INTERVIEW_ANALYSIS_PROMPT}"
+        ).text
+        st.session_state.post_applied = True
 
     if st.session_state.post_applied:
         st.subheader("🧠 System Interview Analysis")
@@ -219,17 +217,31 @@ with post_tab:
             ["Proceed", "Hold", "Reject"]
         )
 
-        if st.button("📧 Send Emails") and not st.session_state.emails_sent:
+        # =============================
+        # EMAIL INPUTS (FIXED)
+        # =============================
+        candidate_email = st.text_input("Candidate Email")
+        hr_email = st.text_input("HR Email")
+        interviewer_email = st.text_input("Interviewer Email")
+
+        emails_ready = all([
+            is_valid_email(candidate_email),
+            is_valid_email(hr_email),
+            is_valid_email(interviewer_email)
+        ])
+
+        if not emails_ready:
+            st.info("Enter valid email addresses to enable sending")
+
+        if st.button("📧 Send Emails", disabled=not emails_ready) and not st.session_state.emails_sent:
             st.session_state.emails_sent = True
 
-            # Candidate
             send_email(
                 "Interview Feedback",
                 "Strengths:\n- Strong communication\n\nAreas to improve:\n- Handling ambiguity",
-                st.text_input("Candidate Email")
+                candidate_email
             )
 
-            # HR
             send_email(
                 "Interview Summary & Next Steps",
                 f"""
@@ -242,14 +254,13 @@ Interviewer View:
 Next Step:
 {recommendation}
 """,
-                st.text_input("HR Email")
+                hr_email
             )
 
-            # Interviewer
             send_email(
                 "Interviewer Coaching",
                 gemini_model.generate_content(GEMINI_INTERVIEWER_COACHING_PROMPT).text,
-                st.text_input("Interviewer Email")
+                interviewer_email
             )
 
             st.success("✅ Emails sent")
