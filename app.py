@@ -1,7 +1,3 @@
-# =========================================================
-# INTERVIEW READY – PRODUCTION (GEMINI FEATURE FLAG)
-# =========================================================
-
 import streamlit as st
 import docx
 import re
@@ -14,15 +10,7 @@ import smtplib
 import google.generativeai as genai
 from faster_whisper import WhisperModel
 import imageio_ffmpeg
-
-# =============================
-# FEATURE FLAG
-# =============================
-GEMINI_ENABLED = False  # 🔁 Flip to True to re-enable Gemini
-
-GEMINI_DISABLED_MESSAGE = (
-    "⚠️ Gemini is temporarily disabled. Enable it to resume AI insights."
-)
+import pdfplumber
 
 # =============================
 # PAGE CONFIG
@@ -37,13 +25,13 @@ SENDER_EMAIL = "soumikghoshalireland@gmail.com"
 EMAIL_REGEX = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
 
 # =============================
-# GEMINI CONFIG (UNCHANGED)
+# GEMINI CONFIG
 # =============================
 genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 gemini_model = genai.GenerativeModel(GEMINI_MODEL)
 
 # =============================
-# PROMPTS (UNCHANGED – IMPORTANT)
+# PROMPTS
 # =============================
 COMMON_GEMINI_CONSTRAINTS = """
 NON-NEGOTIABLE RULES:
@@ -55,34 +43,19 @@ NON-NEGOTIABLE RULES:
 """
 
 GEMINI_JD_CV_ANALYSIS_PROMPT = f"""
-You are analyzing a Job Description and a Candidate CV for interview preparation.
+You are analysing a Job Description and Candidate CV.
 
 {COMMON_GEMINI_CONSTRAINTS}
 
-OUTPUT FORMAT (STRICT):
-
-Candidate Name:
-<name or 'Not explicitly stated'>
-
-Candidate Summary:
-- 3–4 bullet points summarizing background and role fit
-
-Key JD Highlights:
-- 5 concise bullets capturing role expectations
-
-Top 10 Candidate Skills:
-- Bullet list (skills inferred directly from CV)
-
-Top 5 Interview Questions:
-- Role-relevant, probing questions
+Provide:
+- Candidate summary
+- Key JD expectations
+- Key candidate skills
+- Interview focus areas
 """
 
 GEMINI_INTERVIEW_ANALYSIS_PROMPT = f"""
-You are analysing an interview transcript.
-
-{COMMON_GEMINI_CONSTRAINTS}
-
-Analyse the interview on:
+Analyse the interview transcript on:
 - Behavioural indicators
 - Leadership & ownership
 - Technical skills
@@ -90,60 +63,41 @@ Analyse the interview on:
 - Growth mentality
 - Handling complex situations
 
-Use bullet points under each heading.
-"""
-
-GEMINI_COMPARISON_PROMPT = f"""
-Compare system interview analysis with interviewer feedback.
-
 {COMMON_GEMINI_CONSTRAINTS}
-
-OUTPUT:
-1. Common agreement areas
-2. Key differences
-3. Open questions for next round
 """
 
 GEMINI_INTERVIEWER_COACHING_PROMPT = f"""
-Provide private coaching feedback for the interviewer.
+Provide coaching feedback for the interviewer.
 
 {COMMON_GEMINI_CONSTRAINTS}
-
-FORMAT:
-- What went well
-- What could be improved
-- Missed probing opportunities
 """
 
 # =============================
-# GEMINI WRAPPER (NEW)
+# SESSION STATE
 # =============================
-def run_gemini(prompt: str) -> str:
-    if not GEMINI_ENABLED:
-        return GEMINI_DISABLED_MESSAGE
-    return gemini_model.generate_content(prompt).text
-
-# =============================
-# SESSION STATE (UNCHANGED)
-# =============================
-for key, default in {
-    "jd_cv_analysis": None,
-    "interview_system_analysis": None,
-    "interviewer_comments": "",
-    "audio_preview": "",
-    "pre_applied": False,
-    "post_applied": False,
-    "emails_sent": False,
-}.items():
+for key in [
+    "jd_cv_analysis",
+    "interview_analysis",
+    "interviewer_comments",
+    "audio_preview",
+    "emails_sent"
+]:
     if key not in st.session_state:
-        st.session_state[key] = default
+        st.session_state[key] = None
 
 # =============================
-# HELPERS (UNCHANGED)
+# HELPERS
 # =============================
 def read_docx(file):
     doc = docx.Document(file)
     return "\n".join(p.text for p in doc.paragraphs).lower()
+
+def read_pdf(file):
+    text = []
+    with pdfplumber.open(file) as pdf:
+        for page in pdf.pages:
+            text.append(page.extract_text() or "")
+    return "\n".join(text).lower()
 
 def is_valid_email(email):
     return email and re.match(EMAIL_REGEX, email)
@@ -161,7 +115,7 @@ def send_email(subject, body, recipient):
         server.send_message(msg)
 
 # =============================
-# WHISPER (UNCHANGED)
+# WHISPER
 # =============================
 @st.cache_resource
 def load_whisper():
@@ -172,16 +126,156 @@ def transcribe_audio(path):
     segments, _ = model.transcribe(path)
     return " ".join(s.text for s in segments).lower()
 
-def extract_audio_from_video(uploaded_file):
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as v:
-        v.write(uploaded_file.read())
-        video_path = v.name
-    audio_path = tempfile.NamedTemporaryFile(delete=False, suffix=".wav").name
-    ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+def extract_audio_from_video(video_path, audio_path):
+    ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
     subprocess.run(
-        [ffmpeg, "-y", "-i", video_path, "-ac", "1", "-ar", "16000", audio_path],
+        [ffmpeg_path, "-y", "-i", video_path, audio_path],
         stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        check=True
+        stderr=subprocess.DEVNULL
     )
-    return audio_path
+
+# =============================
+# UI HEADER
+# =============================
+st.title("🎯 Interview Ready")
+st.caption("Structured pre-interview preparation and post-interview evaluation")
+st.divider()
+
+pre_tab, post_tab = st.tabs(["🧩 Pre-Interview", "🎤 Post-Interview"])
+
+# =====================================================
+# PRE-INTERVIEW TAB
+# =====================================================
+with pre_tab:
+
+    with st.sidebar:
+        st.header("📄 JD & Candidate Overview")
+        if st.session_state.jd_cv_analysis:
+            st.markdown(st.session_state.jd_cv_analysis)
+        else:
+            st.caption("Apply JD & CV to generate overview")
+
+    jd = st.text_area("Job Description", height=220)
+    cv = st.file_uploader(
+        "Candidate CV (DOCX or PDF)",
+        ["docx", "pdf"]
+    )
+
+    if st.button("✅ Apply Pre-Interview Inputs"):
+        if jd and cv:
+            if cv.name.endswith(".docx"):
+                cv_text = read_docx(cv)
+            else:
+                cv_text = read_pdf(cv)
+
+            st.session_state.jd_cv_analysis = gemini_model.generate_content(
+                f"JD:\n{jd}\n\nCV:\n{cv_text}\n\n{GEMINI_JD_CV_ANALYSIS_PROMPT}"
+            ).text
+
+# =====================================================
+# POST-INTERVIEW TAB
+# =====================================================
+with post_tab:
+
+    interview_file = st.file_uploader(
+        "Upload Interview (Text / Audio / Video)",
+        ["txt", "docx", "mp3", "wav", "mp4", "mov", "webm"]
+    )
+
+    interview_text = ""
+
+    if interview_file:
+        suffix = interview_file.name.split(".")[-1]
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=f".{suffix}") as t:
+            t.write(interview_file.read())
+            temp_path = t.name
+
+        if suffix in ["txt"]:
+            interview_text = Path(temp_path).read_text(errors="ignore").lower()
+
+        elif suffix == "docx":
+            interview_text = read_docx(temp_path)
+
+        elif suffix in ["mp3", "wav"]:
+            interview_text = transcribe_audio(temp_path)
+
+        elif suffix in ["mp4", "mov", "webm"]:
+            audio_path = temp_path + ".wav"
+            extract_audio_from_video(temp_path, audio_path)
+            interview_text = transcribe_audio(audio_path)
+
+    if interview_text and st.button("✅ Apply Interview Inputs"):
+        st.session_state.interview_analysis = gemini_model.generate_content(
+            f"{interview_text}\n\n{GEMINI_INTERVIEW_ANALYSIS_PROMPT}"
+        ).text
+
+    if st.session_state.interview_analysis:
+        st.subheader("🧠 System Interview Analysis")
+        st.write(st.session_state.interview_analysis)
+
+    # =============================
+    # INTERVIEWER DICTATION (ALWAYS ENABLED)
+    # =============================
+    st.subheader("🧑‍💼 Interviewer Feedback")
+
+    with st.expander("🎙️ Dictate feedback"):
+        audio = st.audio_input("Record feedback")
+        if audio:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as t:
+                t.write(audio.getvalue())
+                st.session_state.audio_preview = transcribe_audio(t.name)
+
+            st.text_area("Preview", st.session_state.audio_preview)
+
+            if st.button("Use transcription"):
+                st.session_state.interviewer_comments = st.session_state.audio_preview
+
+    st.session_state.interviewer_comments = st.text_area(
+        "Final Comments",
+        st.session_state.interviewer_comments or ""
+    )
+
+    recommendation = st.selectbox(
+        "Overall Recommendation",
+        ["Proceed", "Hold", "Reject"]
+    )
+
+    # =============================
+    # EMAILS
+    # =============================
+    if st.button("📧 Send Emails") and not st.session_state.emails_sent:
+        st.session_state.emails_sent = True
+
+        candidate_email = st.text_input("Candidate Email")
+        hr_email = st.text_input("HR Email")
+        interviewer_email = st.text_input("Interviewer Email")
+
+        send_email(
+            "Interview Feedback",
+            "Thank you for attending the interview.\n\nWe will get back to you shortly.",
+            candidate_email
+        )
+
+        send_email(
+            "Interview Summary",
+            f"""
+System Summary:
+{st.session_state.interview_analysis}
+
+Interviewer Feedback:
+{st.session_state.interviewer_comments}
+
+Recommendation:
+{recommendation}
+""",
+            hr_email
+        )
+
+        send_email(
+            "Interviewer Coaching",
+            gemini_model.generate_content(GEMINI_INTERVIEWER_COACHING_PROMPT).text,
+            interviewer_email
+        )
+
+        st.success("✅ Emails sent successfully")
