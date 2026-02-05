@@ -10,7 +10,7 @@ import smtplib
 import google.generativeai as genai
 from faster_whisper import WhisperModel
 import imageio_ffmpeg
-import pdfplumber
+from PyPDF2 import PdfReader   # ✅ ADDED (pdfplumber removed)
 
 # =============================
 # PAGE CONFIG
@@ -93,10 +93,12 @@ def read_docx(file):
     return "\n".join(p.text for p in doc.paragraphs).lower()
 
 def read_pdf(file):
+    reader = PdfReader(file)
     text = []
-    with pdfplumber.open(file) as pdf:
-        for page in pdf.pages:
-            text.append(page.extract_text() or "")
+    for page in reader.pages:
+        page_text = page.extract_text()
+        if page_text:
+            text.append(page_text)
     return "\n".join(text).lower()
 
 def is_valid_email(email):
@@ -191,7 +193,7 @@ with post_tab:
             t.write(interview_file.read())
             temp_path = t.name
 
-        if suffix in ["txt"]:
+        if suffix == "txt":
             interview_text = Path(temp_path).read_text(errors="ignore").lower()
 
         elif suffix == "docx":
@@ -215,67 +217,4 @@ with post_tab:
         st.write(st.session_state.interview_analysis)
 
     # =============================
-    # INTERVIEWER DICTATION (ALWAYS ENABLED)
-    # =============================
-    st.subheader("🧑‍💼 Interviewer Feedback")
-
-    with st.expander("🎙️ Dictate feedback"):
-        audio = st.audio_input("Record feedback")
-        if audio:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as t:
-                t.write(audio.getvalue())
-                st.session_state.audio_preview = transcribe_audio(t.name)
-
-            st.text_area("Preview", st.session_state.audio_preview)
-
-            if st.button("Use transcription"):
-                st.session_state.interviewer_comments = st.session_state.audio_preview
-
-    st.session_state.interviewer_comments = st.text_area(
-        "Final Comments",
-        st.session_state.interviewer_comments or ""
-    )
-
-    recommendation = st.selectbox(
-        "Overall Recommendation",
-        ["Proceed", "Hold", "Reject"]
-    )
-
-    # =============================
-    # EMAILS
-    # =============================
-    if st.button("📧 Send Emails") and not st.session_state.emails_sent:
-        st.session_state.emails_sent = True
-
-        candidate_email = st.text_input("Candidate Email")
-        hr_email = st.text_input("HR Email")
-        interviewer_email = st.text_input("Interviewer Email")
-
-        send_email(
-            "Interview Feedback",
-            "Thank you for attending the interview.\n\nWe will get back to you shortly.",
-            candidate_email
-        )
-
-        send_email(
-            "Interview Summary",
-            f"""
-System Summary:
-{st.session_state.interview_analysis}
-
-Interviewer Feedback:
-{st.session_state.interviewer_comments}
-
-Recommendation:
-{recommendation}
-""",
-            hr_email
-        )
-
-        send_email(
-            "Interviewer Coaching",
-            gemini_model.generate_content(GEMINI_INTERVIEWER_COACHING_PROMPT).text,
-            interviewer_email
-        )
-
-        st.success("✅ Emails sent successfully")
+    # IN
