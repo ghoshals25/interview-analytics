@@ -1,5 +1,5 @@
 # =============================
-# INTERVIEW READY – FINAL PRODUCTION VERSION
+# INTERVIEW READY – FINAL PRODUCTION (TWO TABS)
 # =============================
 
 import streamlit as st
@@ -80,6 +80,8 @@ Analyse the interview on:
 - Learning capability
 - Growth mentality
 - Handling complex situations
+
+Use bullet points under each heading.
 """
 
 GEMINI_COMPARISON_PROMPT = f"""
@@ -109,6 +111,7 @@ FORMAT:
 # =============================
 for key in [
     "jd_cv_analysis",
+    "jd_cv_hash",
     "interview_system_analysis",
     "interview_comparison",
     "interviewer_comments",
@@ -116,7 +119,7 @@ for key in [
     "emails_sent"
 ]:
     if key not in st.session_state:
-        st.session_state[key] = ""
+        st.session_state[key] = None
 
 # =============================
 # HELPERS
@@ -124,6 +127,9 @@ for key in [
 def read_docx(file):
     doc = docx.Document(file)
     return "\n".join(p.text for p in doc.paragraphs).lower()
+
+def hash_inputs(jd, cv):
+    return hash(jd + cv)
 
 def is_valid_email(email):
     return email and re.match(EMAIL_REGEX, email)
@@ -139,6 +145,43 @@ def send_email(subject, body, recipient):
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
         server.login(SENDER_EMAIL, st.secrets["EMAIL_APP_PASSWORD"])
         server.send_message(msg)
+
+# =============================
+# SKILL BUCKETS (PRE-INTERVIEW)
+# =============================
+SKILL_BUCKETS = {
+    "skills": [
+        "analytics", "data analysis", "insights", "strategy",
+        "stakeholder", "problem solving", "decision making"
+    ],
+    "ownership": [
+        "led", "owned", "managed", "delivered",
+        "end to end", "accountable", "executed"
+    ],
+    "tools": [
+        "python", "sql", "power bi", "tableau",
+        "excel", "etl", "dashboard", "dax"
+    ]
+}
+
+def normalize(text):
+    return re.sub(r"[^a-z0-9 ]", " ", text.lower())
+
+def compute_overlap(jd_text, cv_text):
+    jd_text = normalize(jd_text)
+    cv_text = normalize(cv_text)
+
+    details = {}
+    for bucket, keywords in SKILL_BUCKETS.items():
+        jd_items = {k for k in keywords if k in jd_text}
+        cv_items = {k for k in keywords if k in cv_text}
+
+        details[bucket] = {
+            "union": jd_items | cv_items,
+            "intersection": jd_items & cv_items,
+            "missing": jd_items - cv_items
+        }
+    return details
 
 # =============================
 # WHISPER
@@ -177,47 +220,59 @@ def extract_interview_text(uploaded_file):
             t.write(uploaded_file.read())
             return transcribe_audio(t.name)
     if suffix in [".mp4", ".mov"]:
-        audio = extract_audio_from_video(uploaded_file)
-        return transcribe_audio(audio)
+        return transcribe_audio(extract_audio_from_video(uploaded_file))
     raise ValueError("Unsupported file type")
 
 # =============================
 # UI HEADER
 # =============================
 st.title("🎯 Interview Ready")
-st.caption("The Desired Interview Platform for structured interview preparation")
+st.caption("Preparation before the interview. Evaluation after the interview.")
 st.divider()
 
 # =============================
-# SIDEBAR – JD & CANDIDATE OVERVIEW (PRESERVED)
+# TABS
 # =============================
-with st.sidebar:
-    st.header("📄 JD & Candidate Overview")
-    if st.session_state.jd_cv_analysis:
-        st.markdown(st.session_state.jd_cv_analysis)
-    else:
-        st.caption("Upload a Job Description and CV to generate an overview")
+pre_tab, post_tab = st.tabs(
+    ["🧩 Pre-Interview Preparation", "🎤 Post-Interview Evaluation"]
+)
 
-# =============================
-# PRE-INTERVIEW UI (PRESERVED EXACTLY)
-# =============================
-left_col, right_col = st.columns([1.1, 1])
+# =====================================================
+# 🧩 PRE-INTERVIEW TAB
+# =====================================================
+with pre_tab:
 
-with left_col:
-    st.subheader("📄 Candidate & Role Context")
-    with st.container(border=True):
-        job_description = st.text_area(
-            "Job Description",
-            placeholder="Paste the full job description here…",
-            height=220
-        )
-        uploaded_cv = st.file_uploader("Candidate CV (DOCX)", ["docx"])
+    with st.sidebar:
+        st.header("📄 JD & Candidate Overview")
+        if st.session_state.jd_cv_analysis:
+            st.markdown(st.session_state.jd_cv_analysis)
+        else:
+            st.caption("Upload Job Description and CV")
 
-        if uploaded_cv and job_description:
-            cv_text = read_docx(uploaded_cv)
+    left, right = st.columns([1.1, 1])
 
-            if not st.session_state.jd_cv_analysis:
-                prompt = f"""
+    with left:
+        st.subheader("📄 Candidate & Role Context")
+        with st.container(border=True):
+            job_description = st.text_area(
+                "Job Description",
+                height=220,
+                placeholder="Paste full job description…"
+            )
+            uploaded_cv = st.file_uploader(
+                "Candidate CV (DOCX)",
+                ["docx"],
+                key="cv_pre"
+            )
+
+            if uploaded_cv and job_description:
+                cv_text = read_docx(uploaded_cv)
+                current_hash = hash_inputs(job_description, cv_text)
+
+                if st.session_state.jd_cv_hash != current_hash:
+                    st.session_state.jd_cv_hash = current_hash
+                    st.session_state.jd_cv_analysis = gemini_model.generate_content(
+                        f"""
 JOB DESCRIPTION:
 {job_description}
 
@@ -226,47 +281,166 @@ CANDIDATE CV:
 
 {GEMINI_JD_CV_ANALYSIS_PROMPT}
 """
-                st.session_state.jd_cv_analysis = gemini_model.generate_content(prompt).text
+                    ).text
 
-with right_col:
-    st.subheader("🧠 Skills to JD Overlap Summary")
-    if uploaded_cv and job_description:
-        st.write("See sidebar and analysis above for structured overlap insights.")
-    else:
-        st.caption("Upload JD and CV to view overlap summary.")
+                overlap = compute_overlap(job_description, cv_text)
 
-# =============================
-# INTERVIEW SECTION (ADDED BELOW, NO UI DAMAGE)
-# =============================
-st.divider()
-st.header("🎤 Interview Evaluation")
+    with right:
+        st.subheader("🧠 Skills to JD Overlap Summary")
 
-uploaded_interview = st.file_uploader(
-    "Upload Interview Transcript / Audio / Video",
-    ["txt", "docx", "mp3", "wav", "mp4", "mov"]
-)
+        if uploaded_cv and job_description:
+            jd_focus, cv_matches, cv_gaps = set(), set(), set()
 
-if uploaded_interview:
-    interview_text = extract_interview_text(uploaded_interview)
+            for info in overlap.values():
+                jd_focus |= info["union"]
+                cv_matches |= info["intersection"]
+                cv_gaps |= info["missing"]
 
-    if not st.session_state.interview_system_analysis:
-        prompt = f"""
+            st.markdown("**What the role is looking for**")
+            st.write(
+                f"The role emphasises {', '.join(sorted(jd_focus))}."
+                if jd_focus else
+                "No strong capability signals detected in the JD."
+            )
+
+            st.markdown("**What the CV demonstrates clearly**")
+            st.write(
+                f"The CV clearly demonstrates {', '.join(sorted(cv_matches))}."
+                if cv_matches else
+                "The CV does not strongly evidence the core JD requirements."
+            )
+
+            st.markdown("**Skills and areas to test during the interview**")
+            st.write(
+                f"Probe depth in {', '.join(sorted(cv_gaps))}."
+                if cv_gaps else
+                "No major gaps detected relative to the JD."
+            )
+        else:
+            st.caption("Upload JD and CV to see overlap analysis.")
+
+# =====================================================
+# 🎤 POST-INTERVIEW TAB
+# =====================================================
+with post_tab:
+
+    st.subheader("🎤 Interview Evaluation")
+    st.markdown("**Interviewer:** BSY  \n**Designation:** Director")
+    st.divider()
+
+    uploaded_interview = st.file_uploader(
+        "Upload Interview Transcript / Audio / Video",
+        ["txt", "docx", "mp3", "wav", "mp4", "mov"],
+        key="interview_file"
+    )
+
+    if uploaded_interview:
+        interview_text = extract_interview_text(uploaded_interview)
+
+        if not st.session_state.interview_system_analysis:
+            st.session_state.interview_system_analysis = gemini_model.generate_content(
+                f"""
 INTERVIEW TRANSCRIPT:
 {interview_text}
 
 {GEMINI_INTERVIEW_ANALYSIS_PROMPT}
 """
-        st.session_state.interview_system_analysis = gemini_model.generate_content(prompt).text
+            ).text
 
-    st.subheader("🧠 System Interview Analysis")
-    st.markdown(st.session_state.interview_system_analysis)
+        st.subheader("🧠 System Interview Analysis")
+        st.markdown(st.session_state.interview_system_analysis)
 
-    st.subheader("🧑‍💼 Interviewer Observations")
+        # -------- Dictation --------
+        st.subheader("🧑‍💼 Interviewer Observations")
 
-    with st.expander("🎙️ Dictate interviewer feedback"):
-        audio = st.audio_input("Record feedback")
-        if audio:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as t:
-                t.write(audio.getvalue())
-                st.session_state.audio_preview = transcribe_audio(t.name)
-            st.text_area("Transcription preview", st.session_state.audio_preview, height=150)
+        with st.expander("🎙️ Dictate interviewer feedback"):
+            audio = st.audio_input("Record feedback")
+            if audio:
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as t:
+                    t.write(audio.getvalue())
+                    st.session_state.audio_preview = transcribe_audio(t.name)
+
+                st.text_area(
+                    "Transcription preview (editable)",
+                    value=st.session_state.audio_preview,
+                    height=150
+                )
+
+                if st.button("Use this transcription"):
+                    st.session_state.interviewer_comments = st.session_state.audio_preview
+
+        st.session_state.interviewer_comments = st.text_area(
+            "Final Interviewer Comments",
+            value=st.session_state.interviewer_comments or "",
+            height=180
+        )
+
+        recommendation = st.selectbox(
+            "Overall Recommendation",
+            ["Select", "Strong Yes", "Yes", "Borderline", "No"]
+        )
+
+        if recommendation != "Select" and st.session_state.interviewer_comments:
+
+            if not st.session_state.interview_comparison:
+                st.session_state.interview_comparison = gemini_model.generate_content(
+                    f"""
+SYSTEM ANALYSIS:
+{st.session_state.interview_system_analysis}
+
+INTERVIEWER FEEDBACK:
+{st.session_state.interviewer_comments}
+
+{GEMINI_COMPARISON_PROMPT}
+"""
+                ).text
+
+            st.subheader("🔍 System vs Interviewer Comparison")
+            st.markdown(st.session_state.interview_comparison)
+
+            # -------- Email Routing --------
+            st.subheader("📧 Send Interview Results")
+
+            candidate_email = st.text_input("Candidate Email")
+            hr_email = st.text_input("HR Email")
+            interviewer_email = st.text_input("Interviewer Email")
+
+            if st.button("Send Emails") and not st.session_state.emails_sent:
+                st.session_state.emails_sent = True
+
+                send_email(
+                    "Interview Outcome",
+                    "Thank you for interviewing with us. We will share next steps shortly.",
+                    candidate_email
+                )
+
+                send_email(
+                    "Interview Evaluation – Internal",
+                    f"""
+PRE-INTERVIEW CONTEXT:
+{st.session_state.jd_cv_analysis}
+
+SYSTEM INTERVIEW ANALYSIS:
+{st.session_state.interview_system_analysis}
+
+INTERVIEWER FEEDBACK:
+{st.session_state.interviewer_comments}
+
+COMPARISON:
+{st.session_state.interview_comparison}
+
+RECOMMENDATION:
+{recommendation}
+""",
+                    hr_email
+                )
+
+                send_email(
+                    "Interviewer Coaching Feedback",
+                    gemini_model.generate_content(
+                        GEMINI_INTERVIEWER_COACHING_PROMPT
+                    ).text,
+                    interviewer_email
+                )
+
+                st.success("✅ Emails sent successfully")
