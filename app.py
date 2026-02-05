@@ -10,12 +10,11 @@ import subprocess
 from pathlib import Path
 from email.message import EmailMessage
 import smtplib
-from PyPDF2 import PdfReader
-
 
 import google.generativeai as genai
 from faster_whisper import WhisperModel
 import imageio_ffmpeg
+from PyPDF2 import PdfReader
 
 # =============================
 # PAGE CONFIG
@@ -134,8 +133,9 @@ def read_pdf(file):
     reader = PdfReader(file)
     text = []
     for page in reader.pages:
-        if page.extract_text():
-            text.append(page.extract_text())
+        extracted = page.extract_text()
+        if extracted:
+            text.append(extracted)
     return "\n".join(text).lower()
 
 def normalize(text):
@@ -242,7 +242,7 @@ pre_tab, post_tab = st.tabs(
 # =====================================================
 with pre_tab:
 
-    with st. sidebar:
+    with st.sidebar:
         st.header("📄 JD & Candidate Overview")
         if st.session_state.jd_cv_analysis:
             st.markdown(st.session_state.jd_cv_analysis)
@@ -260,16 +260,16 @@ with pre_tab:
                 placeholder="Paste job description…"
             )
             uploaded_cv = st.file_uploader(
-                "Candidate CV (DOCX/PDF)",
+                "Candidate CV (DOCX / PDF)",
                 ["docx", "pdf"],
                 key="pre_cv"
             )
 
             if uploaded_cv and job_description:
-               if uploaded_cv.name.lower().endswith(".pdf"):
-    cv_text = read_pdf(uploaded_cv)
-else:
-    cv_text = read_docx(uploaded_cv)
+                if uploaded_cv.name.lower().endswith(".pdf"):
+                    cv_text = read_pdf(uploaded_cv)
+                else:
+                    cv_text = read_docx(uploaded_cv)
 
                 current_hash = hash_inputs(job_description, cv_text)
 
@@ -343,7 +343,6 @@ INTERVIEW TRANSCRIPT:
         st.subheader("🧠 System Interview Analysis")
         st.markdown(st.session_state.interview_system_analysis)
 
-        # -------- Dictation --------
         st.subheader("🧑‍💼 Interviewer Observations")
 
         with st.expander("🎙️ Dictate interviewer feedback (optional)"):
@@ -391,7 +390,6 @@ INTERVIEWER FEEDBACK:
             st.subheader("🔍 System vs Interviewer Comparison")
             st.markdown(st.session_state.interview_comparison)
 
-            # -------- EMAILS --------
             st.subheader("📧 Send Interview Results")
 
             candidate_email = st.text_input("Candidate Email")
