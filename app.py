@@ -1,6 +1,6 @@
-# =============================
-# INTERVIEW READY – FINAL PRODUCTION (TWO TABS)
-# =============================
+# =========================================================
+# INTERVIEW READY – FINAL PRODUCTION VERSION (CHECKLIST OK)
+# =========================================================
 
 import streamlit as st
 import docx
@@ -34,7 +34,7 @@ genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 gemini_model = genai.GenerativeModel(GEMINI_MODEL)
 
 # =============================
-# GEMINI PROMPTS
+# PROMPTS
 # =============================
 COMMON_GEMINI_CONSTRAINTS = """
 NON-NEGOTIABLE RULES:
@@ -128,6 +128,9 @@ def read_docx(file):
     doc = docx.Document(file)
     return "\n".join(p.text for p in doc.paragraphs).lower()
 
+def normalize(text):
+    return re.sub(r"[^a-z0-9 ]", " ", text.lower())
+
 def hash_inputs(jd, cv):
     return hash(jd + cv)
 
@@ -150,22 +153,10 @@ def send_email(subject, body, recipient):
 # SKILL BUCKETS (PRE-INTERVIEW)
 # =============================
 SKILL_BUCKETS = {
-    "skills": [
-        "analytics", "data analysis", "insights", "strategy",
-        "stakeholder", "problem solving", "decision making"
-    ],
-    "ownership": [
-        "led", "owned", "managed", "delivered",
-        "end to end", "accountable", "executed"
-    ],
-    "tools": [
-        "python", "sql", "power bi", "tableau",
-        "excel", "etl", "dashboard", "dax"
-    ]
+    "skills": ["analytics", "insights", "strategy", "stakeholder", "problem solving"],
+    "ownership": ["led", "owned", "managed", "delivered", "end to end"],
+    "tools": ["python", "sql", "power bi", "tableau", "excel"]
 }
-
-def normalize(text):
-    return re.sub(r"[^a-z0-9 ]", " ", text.lower())
 
 def compute_overlap(jd_text, cv_text):
     jd_text = normalize(jd_text)
@@ -175,7 +166,6 @@ def compute_overlap(jd_text, cv_text):
     for bucket, keywords in SKILL_BUCKETS.items():
         jd_items = {k for k in keywords if k in jd_text}
         cv_items = {k for k in keywords if k in cv_text}
-
         details[bucket] = {
             "union": jd_items | cv_items,
             "intersection": jd_items & cv_items,
@@ -224,10 +214,10 @@ def extract_interview_text(uploaded_file):
     raise ValueError("Unsupported file type")
 
 # =============================
-# UI HEADER
+# HEADER
 # =============================
 st.title("🎯 Interview Ready")
-st.caption("Preparation before the interview. Evaluation after the interview.")
+st.caption("Pre-interview preparation and post-interview evaluation")
 st.divider()
 
 # =============================
@@ -238,7 +228,7 @@ pre_tab, post_tab = st.tabs(
 )
 
 # =====================================================
-# 🧩 PRE-INTERVIEW TAB
+# PRE-INTERVIEW TAB
 # =====================================================
 with pre_tab:
 
@@ -247,7 +237,7 @@ with pre_tab:
         if st.session_state.jd_cv_analysis:
             st.markdown(st.session_state.jd_cv_analysis)
         else:
-            st.caption("Upload Job Description and CV")
+            st.caption("Upload JD and CV to see overview")
 
     left, right = st.columns([1.1, 1])
 
@@ -257,12 +247,12 @@ with pre_tab:
             job_description = st.text_area(
                 "Job Description",
                 height=220,
-                placeholder="Paste full job description…"
+                placeholder="Paste job description…"
             )
             uploaded_cv = st.file_uploader(
                 "Candidate CV (DOCX)",
                 ["docx"],
-                key="cv_pre"
+                key="pre_cv"
             )
 
             if uploaded_cv and job_description:
@@ -297,30 +287,19 @@ CANDIDATE CV:
                 cv_gaps |= info["missing"]
 
             st.markdown("**What the role is looking for**")
-            st.write(
-                f"The role emphasises {', '.join(sorted(jd_focus))}."
-                if jd_focus else
-                "No strong capability signals detected in the JD."
-            )
+            st.write(", ".join(sorted(jd_focus)) if jd_focus else "No strong signals")
 
             st.markdown("**What the CV demonstrates clearly**")
-            st.write(
-                f"The CV clearly demonstrates {', '.join(sorted(cv_matches))}."
-                if cv_matches else
-                "The CV does not strongly evidence the core JD requirements."
-            )
+            st.write(", ".join(sorted(cv_matches)) if cv_matches else "No clear matches")
 
             st.markdown("**Skills and areas to test during the interview**")
-            st.write(
-                f"Probe depth in {', '.join(sorted(cv_gaps))}."
-                if cv_gaps else
-                "No major gaps detected relative to the JD."
-            )
+            st.write(", ".join(sorted(cv_gaps)) if cv_gaps else "No major gaps detected")
+
         else:
-            st.caption("Upload JD and CV to see overlap analysis.")
+            st.caption("Upload JD and CV to see overlap summary")
 
 # =====================================================
-# 🎤 POST-INTERVIEW TAB
+# POST-INTERVIEW TAB
 # =====================================================
 with post_tab:
 
@@ -331,7 +310,7 @@ with post_tab:
     uploaded_interview = st.file_uploader(
         "Upload Interview Transcript / Audio / Video",
         ["txt", "docx", "mp3", "wav", "mp4", "mov"],
-        key="interview_file"
+        key="post_interview"
     )
 
     if uploaded_interview:
@@ -353,11 +332,11 @@ INTERVIEW TRANSCRIPT:
         # -------- Dictation --------
         st.subheader("🧑‍💼 Interviewer Observations")
 
-        with st.expander("🎙️ Dictate interviewer feedback"):
-            audio = st.audio_input("Record feedback")
-            if audio:
+        with st.expander("🎙️ Dictate interviewer feedback (optional)"):
+            audio_input = st.audio_input("Record your feedback")
+            if audio_input:
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as t:
-                    t.write(audio.getvalue())
+                    t.write(audio_input.getvalue())
                     st.session_state.audio_preview = transcribe_audio(t.name)
 
                 st.text_area(
@@ -398,7 +377,7 @@ INTERVIEWER FEEDBACK:
             st.subheader("🔍 System vs Interviewer Comparison")
             st.markdown(st.session_state.interview_comparison)
 
-            # -------- Email Routing --------
+            # -------- EMAILS --------
             st.subheader("📧 Send Interview Results")
 
             candidate_email = st.text_input("Candidate Email")
