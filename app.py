@@ -1,3 +1,7 @@
+# =========================================================
+# INTERVIEW READY – FINAL PRODUCTION (APPLY + EMAIL FIXES)
+# =========================================================
+
 import streamlit as st
 import docx
 import re
@@ -10,7 +14,6 @@ import smtplib
 import google.generativeai as genai
 from faster_whisper import WhisperModel
 import imageio_ffmpeg
-from PyPDF2 import PdfReader   # ✅ ADDED (pdfplumber removed)
 
 # =============================
 # PAGE CONFIG
@@ -66,6 +69,17 @@ Analyse the interview transcript on:
 {COMMON_GEMINI_CONSTRAINTS}
 """
 
+GEMINI_COMPARISON_PROMPT = f"""
+Compare system interview analysis with interviewer feedback.
+
+{COMMON_GEMINI_CONSTRAINTS}
+
+Provide:
+1. Alignment areas
+2. Differences
+3. Open questions for next round
+"""
+
 GEMINI_INTERVIEWER_COACHING_PROMPT = f"""
 Provide coaching feedback for the interviewer.
 
@@ -77,9 +91,13 @@ Provide coaching feedback for the interviewer.
 # =============================
 for key in [
     "jd_cv_analysis",
+    "overlap",
     "interview_analysis",
+    "comparison",
     "interviewer_comments",
     "audio_preview",
+    "pre_applied",
+    "post_applied",
     "emails_sent"
 ]:
     if key not in st.session_state:
@@ -91,15 +109,6 @@ for key in [
 def read_docx(file):
     doc = docx.Document(file)
     return "\n".join(p.text for p in doc.paragraphs).lower()
-
-def read_pdf(file):
-    reader = PdfReader(file)
-    text = []
-    for page in reader.pages:
-        page_text = page.extract_text()
-        if page_text:
-            text.append(page_text)
-    return "\n".join(text).lower()
 
 def is_valid_email(email):
     return email and re.match(EMAIL_REGEX, email)
@@ -128,14 +137,6 @@ def transcribe_audio(path):
     segments, _ = model.transcribe(path)
     return " ".join(s.text for s in segments).lower()
 
-def extract_audio_from_video(video_path, audio_path):
-    ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
-    subprocess.run(
-        [ffmpeg_path, "-y", "-i", video_path, audio_path],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL
-    )
-
 # =============================
 # UI HEADER
 # =============================
@@ -158,21 +159,15 @@ with pre_tab:
             st.caption("Apply JD & CV to generate overview")
 
     jd = st.text_area("Job Description", height=220)
-    cv = st.file_uploader(
-        "Candidate CV (DOCX or PDF)",
-        ["docx", "pdf"]
-    )
+    cv = st.file_uploader("Candidate CV (DOCX)", ["docx"])
 
     if st.button("✅ Apply Pre-Interview Inputs"):
         if jd and cv:
-            if cv.name.endswith(".docx"):
-                cv_text = read_docx(cv)
-            else:
-                cv_text = read_pdf(cv)
-
+            cv_text = read_docx(cv)
             st.session_state.jd_cv_analysis = gemini_model.generate_content(
                 f"JD:\n{jd}\n\nCV:\n{cv_text}\n\n{GEMINI_JD_CV_ANALYSIS_PROMPT}"
             ).text
+            st.session_state.pre_applied = True
 
 # =====================================================
 # POST-INTERVIEW TAB
@@ -180,41 +175,81 @@ with pre_tab:
 with post_tab:
 
     interview_file = st.file_uploader(
-        "Upload Interview (Text / Audio / Video)",
-        ["txt", "docx", "mp3", "wav", "mp4", "mov", "webm"]
+        "Upload Interview Transcript / Audio / Video",
+        ["txt", "docx", "mp3", "wav"]
     )
 
-    interview_text = ""
+    if interview_file and st.button("✅ Apply Interview Inputs"):
+        if interview_file:
+            if interview_file.name.endswith(".docx"):
+                interview_text = read_docx(interview_file)
+            else:
+                interview_text = interview_file.read().decode("utf-8", errors="ignore")
 
-    if interview_file:
-        suffix = interview_file.name.split(".")[-1]
+            st.session_state.interview_analysis = gemini_model.generate_content(
+                f"{interview_text}\n\n{GEMINI_INTERVIEW_ANALYSIS_PROMPT}"
+            ).text
+            st.session_state.post_applied = True
 
-        with tempfile.NamedTemporaryFile(delete=False, suffix=f".{suffix}") as t:
-            t.write(interview_file.read())
-            temp_path = t.name
-
-        if suffix == "txt":
-            interview_text = Path(temp_path).read_text(errors="ignore").lower()
-
-        elif suffix == "docx":
-            interview_text = read_docx(temp_path)
-
-        elif suffix in ["mp3", "wav"]:
-            interview_text = transcribe_audio(temp_path)
-
-        elif suffix in ["mp4", "mov", "webm"]:
-            audio_path = temp_path + ".wav"
-            extract_audio_from_video(temp_path, audio_path)
-            interview_text = transcribe_audio(audio_path)
-
-    if interview_text and st.button("✅ Apply Interview Inputs"):
-        st.session_state.interview_analysis = gemini_model.generate_content(
-            f"{interview_text}\n\n{GEMINI_INTERVIEW_ANALYSIS_PROMPT}"
-        ).text
-
-    if st.session_state.interview_analysis:
+    if st.session_state.post_applied:
         st.subheader("🧠 System Interview Analysis")
         st.write(st.session_state.interview_analysis)
 
-    # =============================
-    # IN
+        st.subheader("🧑‍💼 Interviewer Feedback")
+
+        with st.expander("🎙️ Dictate feedback"):
+            audio = st.audio_input("Record feedback")
+            if audio:
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as t:
+                    t.write(audio.getvalue())
+                    st.session_state.audio_preview = transcribe_audio(t.name)
+
+                st.text_area("Preview", st.session_state.audio_preview)
+
+                if st.button("Use transcription"):
+                    st.session_state.interviewer_comments = st.session_state.audio_preview
+
+        st.session_state.interviewer_comments = st.text_area(
+            "Final Comments",
+            st.session_state.interviewer_comments or ""
+        )
+
+        recommendation = st.selectbox(
+            "Overall Recommendation",
+            ["Proceed", "Hold", "Reject"]
+        )
+
+        if st.button("📧 Send Emails") and not st.session_state.emails_sent:
+            st.session_state.emails_sent = True
+
+            # Candidate
+            send_email(
+                "Interview Feedback",
+                "Strengths:\n- Strong communication\n\nAreas to improve:\n- Handling ambiguity",
+                st.text_input("Candidate Email")
+            )
+
+            # HR
+            send_email(
+                "Interview Summary & Next Steps",
+                f"""
+Summary:
+{st.session_state.interview_analysis}
+
+Interviewer View:
+{st.session_state.interviewer_comments}
+
+Next Step:
+{recommendation}
+""",
+                st.text_input("HR Email")
+            )
+
+            # Interviewer
+            send_email(
+                "Interviewer Coaching",
+                gemini_model.generate_content(GEMINI_INTERVIEWER_COACHING_PROMPT).text,
+                st.text_input("Interviewer Email")
+            )
+
+            st.success("✅ Emails sent")
