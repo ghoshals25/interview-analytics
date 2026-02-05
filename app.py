@@ -266,7 +266,11 @@ with pre_tab:
             )
 
             if uploaded_cv and job_description:
-                cv_text = read_docx(uploaded_cv)
+               if uploaded_cv.name.lower().endswith(".pdf"):
+    cv_text = read_pdf(uploaded_cv)
+else:
+    cv_text = read_docx(uploaded_cv)
+
                 current_hash = hash_inputs(job_description, cv_text)
 
                 if st.session_state.jd_cv_hash != current_hash:
