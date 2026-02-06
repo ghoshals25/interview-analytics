@@ -163,7 +163,7 @@ def send_email(subject, body, recipient):
         server.send_message(msg)
 
 # =============================
-# SKILL BUCKETS (PRE-INTERVIEW)
+# SKILL BUCKETS
 # =============================
 SKILL_BUCKETS = {
     "skills": ["analytics", "insights", "strategy", "stakeholder", "problem solving"],
@@ -174,7 +174,6 @@ SKILL_BUCKETS = {
 def compute_overlap(jd_text, cv_text):
     jd_text = normalize(jd_text)
     cv_text = normalize(cv_text)
-
     details = {}
     for bucket, keywords in SKILL_BUCKETS.items():
         jd_items = {k for k in keywords if k in jd_text}
@@ -247,21 +246,22 @@ pre_tab, post_tab = st.tabs(
 # =====================================================
 with pre_tab:
 
-    with st.sidebar:
-        st.header("📄 JD & Candidate Overview")
-        if st.session_state.jd_cv_analysis:
-            st.markdown(st.session_state.jd_cv_analysis)
-        else:
-            st.caption("Upload JD and CV to see overview")
-
     left, right = st.columns([1.1, 1])
 
+    # ---------- LEFT: JD & CV ----------
     with left:
         st.subheader("📄 Candidate & Role Context")
         with st.container(border=True):
-            job_description = st.text_area("Job Description", height=220)
+            job_description = st.text_area(
+                "Job Description",
+                height=220,
+                placeholder="Paste job description…",
+            )
+
             uploaded_cv = st.file_uploader(
-                "Candidate CV (DOCX/PDF)", ["docx", "pdf"], key="pre_cv"
+                "Candidate CV (DOCX/PDF)",
+                ["docx", "pdf"],
+                key="pre_cv",
             )
 
             if uploaded_cv and job_description:
@@ -288,12 +288,12 @@ CANDIDATE CV:
 
                 overlap = compute_overlap(job_description, cv_text)
 
+    # ---------- RIGHT: OVERLAP ----------
     with right:
         st.subheader("🧠 Skills to JD Overlap Summary")
 
         if uploaded_cv and job_description:
             jd_focus, cv_matches, cv_gaps = set(), set(), set()
-
             for info in overlap.values():
                 jd_focus |= info["union"]
                 cv_matches |= info["intersection"]
@@ -308,8 +308,21 @@ CANDIDATE CV:
             st.markdown("**Skills and areas to test during the interview**")
             st.write(", ".join(sorted(cv_gaps)) if cv_gaps else "No major gaps detected")
 
+        else:
+            st.caption("Upload JD and CV to see overlap summary")
+
+    # =================================================
+    # ✅ SIDEBAR (MOVED HERE — FIX)
+    # =================================================
+    with st.sidebar:
+        st.header("📄 JD & Candidate Overview")
+        if st.session_state.jd_cv_analysis:
+            st.markdown(st.session_state.jd_cv_analysis)
+        else:
+            st.caption("Upload JD and CV to see overview")
+
 # =====================================================
-# POST-INTERVIEW TAB
+# POST-INTERVIEW TAB (UNCHANGED)
 # =====================================================
 with post_tab:
 
@@ -341,7 +354,6 @@ INTERVIEW TRANSCRIPT:
         st.subheader("🧠 System Interview Analysis")
         st.markdown(st.session_state.interview_system_analysis)
 
-        # -------- Dictation (FIXED & INGESTED) --------
         st.subheader("🧑‍💼 Interviewer Observations")
 
         with st.expander("🎙️ Dictate interviewer feedback (optional)"):
@@ -394,7 +406,6 @@ INTERVIEWER FEEDBACK:
             st.subheader("🔍 System vs Interviewer Comparison")
             st.markdown(st.session_state.interview_comparison)
 
-            # -------- EMAILS --------
             st.subheader("📧 Send Interview Results")
 
             candidate_email = st.text_input("Candidate Email")
